@@ -799,15 +799,22 @@ my-fastapi/
 
 우선순위대로. 각 단계가 다음 단계의 전제다. **Phase 5가 목적지고 1~4는 거기까지 가는 길이다.**
 
-### Phase 1 — 뼈대 (여기서 타협하면 나중에 못 고친다)
-- [ ] `core/config.py` — pydantic-settings, `.env.example` 동기화
-- [ ] `bootstrap/lifespan.py` — 엔진·Redis를 여기서만 생성. **전역 인스턴스 0개**
-- [ ] `common/db/session.py` — `SessionDep` / `TxDep`
-- [ ] alembic 초기화 + **첫 리비전 커밋**. `create_all` 없음
-- [ ] `.importlinter` + CI 연결
-- [ ] `bootstrap/middleware.py` — CORS(허용 오리진은 설정값), 요청 ID (§0)
-- [ ] `tests/conftest.py` — testcontainers, 트랜잭션 롤백 격리
-- [ ] ruff + pre-commit + CI
+### Phase 1 — 뼈대 (여기서 타협하면 나중에 못 고친다) ✅
+- [x] `core/config.py` — pydantic-settings, `.env.example` 동기화(테스트로 강제)
+- [x] `bootstrap/lifespan.py` — 엔진·Redis를 여기서만 생성. **전역 인스턴스 0개**
+- [x] `common/db/session.py` — `SessionDep` / `TxDep`
+- [x] alembic 초기화 + **첫 리비전 커밋**(`0001_baseline`, 빈 스키마). `create_all` 없음
+- [x] `.importlinter` + CI 연결 — 계약 3개(layers, core 독립, common 무지)
+- [x] `bootstrap/middleware.py` — CORS(허용 오리진은 설정값), 요청 ID (§0)
+- [x] `tests/conftest.py` — testcontainers, 트랜잭션 롤백 격리(`create_savepoint`)
+- [x] ruff + pre-commit + CI (lint / test / migrations 3잡)
+
+Phase 1에서 추가로 확정한 것:
+- `common/db/base.py` — `Base` + **제약 이름 규칙**. 첫 리비전 전에 정해야 하는 값이다
+- `common/openapi.py` — operation id 고정 + 중복 시 **기동 실패** (§0의 계약)
+- `bootstrap/health.py` — liveness/readiness 분리. liveness가 DB를 보면 순단에 프로세스가 죽는다
+- `tests/unit/test_architecture_rules.py` — §7 규칙표의 "코드리뷰/grep" 항목을 **AST 검사**로 승격
+  (규칙 #1·#3·#4·#5·#10, `sys.exit` 금지). 지금은 공허하게 통과하고, Phase 3부터 일한다
 
 ### Phase 2 — 공용 계층
 - [ ] `common/db/` base model, `DateTimeMixin`, `SoftDeleteMixin`(deleted=id 방식)

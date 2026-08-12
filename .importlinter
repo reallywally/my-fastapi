@@ -1,0 +1,45 @@
+; 의존 방향을 문서가 아니라 린트로 못박는다 (§2.2, 규칙 #2).
+;   uv run lint-imports
+
+[importlinter]
+root_package = app
+include_external_packages = False
+
+[importlinter:contract:layers]
+name = Layered architecture
+type = layers
+layers =
+    app.bootstrap
+    app.modules
+    app.common
+    app.core
+
+; core 는 정말로 아무것도 import 하지 않는지 확인한다.
+; layers 계약은 "위에서 아래"만 막는다. 이건 core 가 상위를 아예 모른다는 것을 못박는다.
+[importlinter:contract:core-is-independent]
+name = core imports nothing from app
+type = forbidden
+source_modules =
+    app.core
+forbidden_modules =
+    app.common
+    app.modules
+    app.bootstrap
+
+; common 은 도메인을 모른다 (§2.2 해결 2).
+[importlinter:contract:common-knows-no-domain]
+name = common knows no domain
+type = forbidden
+source_modules =
+    app.common
+forbidden_modules =
+    app.modules
+    app.bootstrap
+
+; Phase 5 에서 board 컨텍스트 내부 계약을 추가한다 (§4.1):
+; [importlinter:contract:board-internal]
+; type = layers
+; layers =
+;     app.modules.board.comment | app.modules.board.attachment
+;     app.modules.board.post
+;     app.modules.board.board

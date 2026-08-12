@@ -1,0 +1,30 @@
+default_install_hook_types: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      # 커밋 전에 의존 방향을 검사한다. CI 에서 알기 전에 여기서 걸린다 (§2.2).
+      - id: lint-imports
+        name: lint-imports
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false
+        types: [python]
