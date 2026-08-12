@@ -870,9 +870,36 @@ Phase 2에서 추가로 확정한 것:
 - `common/pagination.py` — §4.3의 `Page{items, next_cursor, has_next}`. Phase 5에서 쓰지만
   화면이 처음부터 의존하는 계약이라(§0) 지금 고정한다. `total`은 넣지 않는다
 
-### Phase 3 — 첫 모듈 (`user`)로 패턴 확정
-- [ ] `modules/user/` 5파일 전부 + **테스트 3종(unit/integration/e2e) 동시에**
-- [ ] 여기서 확정된 모양이 이후 모든 모듈의 템플릿이 된다
+### Phase 3 — 첫 모듈 (`user`)로 패턴 확정 ✅
+- [x] `modules/user/` 5파일 전부 + **테스트 3종(unit/integration/e2e) 동시에**
+- [x] 여기서 확정된 모양이 이후 모든 모듈의 템플릿이 된다
+
+**확정된 모듈 템플릿:**
+
+```
+modules/<name>/
+├─ __init__.py      # router 만 노출. bootstrap 이 보는 유일한 이름
+├─ router.py        # HTTP. 읽기는 SessionDep, 쓰기는 TxDep (§1.1)
+├─ schema.py        # 요청/응답. UserOut 처럼 응답은 허용 목록으로 (해시 노출 방지)
+├─ service.py       # 규칙. commit 금지, Request 금지, 에러는 코드로
+├─ repository.py    # 쿼리만. deleted==0 도, commit 도 쓰지 않는다
+├─ model.py         # 테이블. Base + PrimaryKeyMixin + DateTimeMixin + SoftDeleteMixin
+└─ deps.py          # 필요할 때만. 요청 스코프 횡단 관심사
+```
+
+새 모듈을 만들 때 잊기 쉬운 두 곳 — 둘 다 테스트가 잡는다:
+- `bootstrap/models.py` 에 모델 import 추가 (안 하면 autogenerate 가 **빈 리비전**을 만든다)
+- `locale/{ko,en}.json` 에 에러 코드 추가 (안 하면 사용자에게 `user.not_found` 날문자가 보인다)
+
+Phase 3에서 추가로 확정한 것:
+- `common/security/principal.py` — `Principal(id, is_superuser)` + `can_act_on()`.
+  §4.6의 소유권 규칙을 한 곳에 두고, `modules/auth`(발급)와 `modules/user`(소비)가
+  서로를 import하지 않게 한다
+- `tests/factories.py` — argon2 해시를 프로세스당 한 번만 계산한다. 안 하면 테스트가 느려진다
+- `migrations/env.py` 의 `render_item` — 커스텀 타입의 **import까지** 렌더링한다
+- **인증은 Phase 4다.** `modules/user/deps.py` 가 지금은 401을 낸다. 가짜 주체를 넣으면
+  인가가 걸린 척하는 엔드포인트가 되고, 그게 Phase 4까지 살아남으면 그대로 구멍이다.
+  라우트를 지금 노출하는 이유는 §0 — OpenAPI 계약이 확정되어야 화면 작업을 병행할 수 있다
 
 ### Phase 4 — 인증/인가
 - [ ] `modules/auth/` — 로그인, 리프레시, `UserSessionStore`(캐시 무효화 단일 지점)
@@ -928,6 +955,10 @@ Phase 2에서 추가로 확정한 것:
 | 18 | SQLite 전용 코드는 `db/engine.py`·`db/types.py` 밖으로 안 나간다 | 리뷰 (§1.6) |
 | 19 | 시각은 aware UTC. naive 저장은 거부된다 | `UTCDateTime` 이 예외 |
 | 20 | 5xx 응답 본문에 내부 정보 금지 | e2e 테스트 (§2.6) |
+| 21 | 새 모델은 `bootstrap/models.py` 에 등록한다 | `test_model_registry.py` |
+| 22 | soft delete 테이블의 unique 는 `deleted` 를 포함한다 | `test_model_registry.py` |
+| 23 | `raise ...(code=)` 의 코드는 카탈로그에 있어야 한다 | `test_errors.py` (AST) |
+| 24 | 응답 스키마는 허용 목록. 모델을 그대로 직렬화하지 않는다 | 리뷰 + e2e(해시 미노출) |
 
 ---
 

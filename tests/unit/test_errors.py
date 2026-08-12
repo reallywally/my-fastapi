@@ -1,5 +1,6 @@
 """에러 코드 체계와 i18n 카탈로그 (§2.6)."""
 
+import ast
 import json
 
 import pytest
@@ -7,7 +8,7 @@ import pytest
 from app.common.errors import AppError, ForbiddenError, NotFoundError, negotiate_locale, render
 from app.common.errors.exceptions import STATUS_TO_CODE
 from app.core.constants import SUPPORTED_LOCALES
-from app.core.paths import LOCALE_DIR
+from app.core.paths import APP_DIR, LOCALE_DIR
 
 
 def test_error_carries_a_code_not_a_message():
@@ -63,6 +64,28 @@ def test_every_builtin_error_code_has_a_message():
 def _all_subclasses(cls: type) -> set[type]:
     direct = set(cls.__subclasses__())
     return direct.union(*(_all_subclasses(sub) for sub in direct)) if direct else direct
+
+
+def test_every_code_raised_in_modules_has_a_message():
+    """§2.6 — 도메인 코드도 카탈로그에 있어야 한다.
+
+    빠지면 사용자에게 `user.not_found` 라는 날문자가 보인다. 500 이 아니라서 조용하다.
+    AST 로 `code='...'` 키워드 인자만 본다 — 주석이나 독스트링은 세지 않는다.
+    """
+    catalog = set(json.loads((LOCALE_DIR / 'ko.json').read_text(encoding='utf-8')))
+
+    raised: set[str] = set()
+    for path in (APP_DIR / 'modules').rglob('*.py'):
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg == 'code' and isinstance(keyword.value, ast.Constant):
+                    raised.add(str(keyword.value.value))
+
+    assert raised, 'modules/ 에서 raise 하는 에러 코드를 찾지 못했다'
+    assert not raised - catalog, f'카탈로그에 없는 도메인 코드: {sorted(raised - catalog)}'
 
 
 @pytest.mark.parametrize(

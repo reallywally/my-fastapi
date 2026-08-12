@@ -7,8 +7,8 @@ Phase 5 의 게시판이 쓸 모양이지만 **지금 고정한다.** 목록 응
 풀스캔이고, 무한 스크롤에는 애초에 필요 없다.
 """
 
-from collections.abc import Callable
-from typing import Annotated
+from collections.abc import Callable, Sequence
+from typing import Annotated, Any
 
 from fastapi import Depends, Query
 from pydantic import BaseModel, Field
@@ -40,15 +40,25 @@ class Page[T](BaseModel):
     has_next: bool = False
 
     @classmethod
-    def of(cls, rows: list[T], *, size: int, cursor_of: Callable[[T], int]) -> 'Page[T]':
+    def of(
+        cls,
+        rows: Sequence[Any],
+        *,
+        size: int,
+        cursor_of: Callable[[Any], int],
+        to_item: Callable[[Any], T] | None = None,
+    ) -> 'Page[T]':
         """`limit(size + 1)` 로 읽어온 결과를 페이지로 자른다.
 
         한 개 더 읽어서 `has_next` 를 판정하는 것이 §4.3 의 방식이다 — 개수를 세지 않는다.
+
+        `rows` 는 보통 ORM 행이고 `to_item` 이 응답 스키마로 바꾼다. **커서는 잘라낸 뒤
+        마지막 항목**에서 뽑는다 — 여분으로 읽은 행에서 뽑으면 그 행을 건너뛴다.
         """
         has_next = len(rows) > size
-        items = rows[:size]
+        kept = list(rows[:size])
         return cls(
-            items=items,
+            items=[to_item(row) if to_item else row for row in kept],
             has_next=has_next,
-            next_cursor=cursor_of(items[-1]) if has_next and items else None,
+            next_cursor=cursor_of(kept[-1]) if has_next and kept else None,
         )

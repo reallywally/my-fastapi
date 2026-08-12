@@ -2,9 +2,13 @@
 
 게시판 API 서버. 설계 기준은 [ARCHITECTURE.md](./ARCHITECTURE.md) — 코드보다 그쪽이 먼저다.
 
-현재 상태: **Phase 1~2 (뼈대 + 공용 계층) 완료.** 도메인 모듈은 아직 없다 (§6 구축 순서).
+현재 상태: **Phase 1~3 완료** (뼈대 + 공용 계층 + `user` 모듈). 다음은 인증/인가 (§6).
 
 DB는 **SQLite**다 (§1.6). 띄울 서버가 없고 `var/app.db` 파일 하나가 전부다.
+
+`modules/user/` 가 이후 모든 모듈의 템플릿이다 — 새 모듈은 그 5파일 구성을 따른다.
+수정·탈퇴 엔드포인트는 **Phase 4까지 401** 이다 (`modules/user/deps.py`). 가짜 주체를
+넣어두면 인가가 걸린 척하는 엔드포인트가 되기 때문에, 안전한 쪽으로 틀리게 뒀다.
 
 ## 시작하기
 
@@ -42,6 +46,27 @@ TEST_REDIS_URL=redis://localhost:6379/15 uv run pytest
 uv run alembic revision --autogenerate -m "설명"
 uv run alembic check            # 모델과 마이그레이션이 어긋나면 실패
 ```
+
+> 새 모델은 `src/app/bootstrap/models.py` 에 import 를 추가해야 한다. 빼먹으면
+> autogenerate 가 에러 없이 **빈 리비전**을 만들고 `alembic check` 도 통과한다.
+> `tests/unit/test_model_registry.py` 가 잡는다.
+
+## 새 모듈 추가하기
+
+`modules/user/` 를 그대로 베낀다 (§6 Phase 3 에서 확정된 템플릿):
+
+```
+modules/<name>/
+├─ __init__.py   router 만 노출
+├─ router.py     HTTP 만. 읽기 SessionDep / 쓰기 TxDep
+├─ schema.py     요청·응답. 응답은 허용 목록으로 (모델 직렬화 금지)
+├─ service.py    규칙. commit·Request 금지, 에러는 코드로
+├─ repository.py 쿼리만
+└─ model.py      테이블
+```
+
+그리고 세 곳에 등록한다: `bootstrap/router.py`, `bootstrap/models.py`,
+`locale/{ko,en}.json`(에러 코드). 뒤의 둘은 잊어도 테스트가 잡는다.
 
 ## 구조
 

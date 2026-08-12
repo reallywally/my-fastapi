@@ -1,17 +1,20 @@
 {
   "internal.error": "Something went wrong on our side.",
   "service.unavailable": "The service is temporarily unavailable.",
-
   "request.invalid": "The request is not valid.",
   "request.unprocessable": "The request could not be processed.",
   "request.method_not_allowed": "That method is not allowed here.",
   "request.rate_limited": "Too many requests. Please try again shortly.",
-
   "auth.unauthorized": "Sign in to continue.",
   "auth.forbidden": "You do not have permission to do that.",
   "auth.token_expired": "Your session expired. Please sign in again.",
   "auth.token_invalid": "The credentials are not valid.",
-
   "resource.not_found": "We could not find what you asked for.",
-  "resource.conflict": "That value already exists."
+  "resource.conflict": "That value already exists.",
+  "user.not_found": "We could not find that user.",
+  "user.username_taken": "That username is already taken.",
+  "user.email_taken": "That email is already in use.",
+  "user.already_exists": "That user already exists.",
+  "user.not_owner": "You can only change your own account.",
+  "user.locked": "This account is locked. Please contact an administrator."
 }

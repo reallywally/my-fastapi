@@ -14,8 +14,10 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy.engine import Connection
 
+from app.bootstrap import models  # noqa: F401 — import 부작용으로 모델을 metadata 에 등록한다
 from app.common.db import Base
 from app.common.db.engine import create_engine
+from app.common.db.types import UTCDateTime
 from app.core.config import get_settings
 
 config = context.config
@@ -30,12 +32,26 @@ def _database_url() -> str:
     return get_settings().database_url
 
 
+def _render_item(type_: str, obj: object, autogen_context: object) -> str | bool:
+    """커스텀 타입을 렌더링하면서 **import 도 같이 넣는다.**
+
+    이걸 안 하면 autogenerate 가 `app.common.db.types.UTCDateTime(...)` 이라고만 쓰고
+    import 는 빠뜨린다. 리비전 파일은 문법적으로 멀쩡하고, `alembic upgrade` 를
+    실행하는 순간 `NameError` 로 죽는다 — 즉 배포 시점에 처음 안다.
+    """
+    if type_ == 'type' and isinstance(obj, UTCDateTime):
+        autogen_context.imports.add('from app.common.db.types import UTCDateTime')  # type: ignore[attr-defined]
+        return 'UTCDateTime()'
+    return False
+
+
 def _configure(**kwargs: object) -> None:
     context.configure(
         target_metadata=target_metadata,
         compare_type=True,
         compare_server_default=True,
         include_schemas=False,
+        render_item=_render_item,
         # SQLite 는 ALTER TABLE 이 거의 없다. batch 모드가 임시 테이블로 복사·교체한다.
         # 이걸 안 켜면 컬럼 변경/삭제 리비전이 실행 시점에 죽는다.
         render_as_batch=get_settings().is_sqlite,
