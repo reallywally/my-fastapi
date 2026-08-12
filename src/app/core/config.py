@@ -10,6 +10,7 @@ from pydantic import RedisDsn, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.constants import Environment, JournalMode
+from app.core.upstream import UpstreamConfig
 
 #: 운영에서 이 값이 그대로면 기동을 막는다.
 # HS256 은 32바이트 미만 키에 경고를 낸다(RFC 7518 §3.2). 기본값도 길이는 맞춰둔다.
@@ -23,6 +24,8 @@ class Settings(BaseSettings):
         extra='ignore',
         frozen=True,
         validate_default=True,
+        # UPSTREAMS__A__READ_TIMEOUT_SECONDS 형태로 개별 키를 덮어쓸 수 있게 한다.
+        env_nested_delimiter='__',
     )
 
     environment: Environment = Environment.local
@@ -58,6 +61,11 @@ class Settings(BaseSettings):
     cors_allow_origins: tuple[str, ...] = ()
     cors_allow_credentials: bool = True
 
+    # --- 외부 서버 (§5). 이름 → 설정. 새 서버는 설정 한 줄이고 코드 변경이 아니다.
+    #   UPSTREAMS={"a":{"base_url":"https://a.example.com"},"b":{"base_url":"..."}}
+    # 개별 키만 덮어쓸 수도 있다: UPSTREAMS__A__READ_TIMEOUT_SECONDS=10
+    upstreams: dict[str, UpstreamConfig] = {}
+
     @property
     def is_production(self) -> bool:
         return self.environment is Environment.production
@@ -87,6 +95,9 @@ class Settings(BaseSettings):
                 raise ValueError('production 에서 db_echo 는 켤 수 없다')
             if self.jwt_secret.get_secret_value() == INSECURE_JWT_SECRET:
                 raise ValueError('production 에서 기본 jwt_secret 을 그대로 쓸 수 없다')
+            insecure = sorted(name for name, up in self.upstreams.items() if not up.verify_tls)
+            if insecure:
+                raise ValueError(f'production 에서 TLS 검증을 끌 수 없다: {insecure}')
         return self
 
 

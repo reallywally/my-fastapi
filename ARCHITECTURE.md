@@ -17,7 +17,7 @@ FBA는 "잘 만든 실무형 스캐폴딩"이지만 이름만큼의 아키텍처
 대신 지금 챙길 것 — 나중에 화면을 붙일 때 서버를 다시 안 고치려면 이건 처음부터 맞아야 한다:
 - **OpenAPI 스키마가 계약이다.** `simplify_operation_ids`(§1.5)로 클라이언트 코드 생성이 깨지지 않게 유지한다
 - **CORS 설정을 처음부터** 둔다. 허용 오리진은 설정값으로 (하드코딩 금지)
-- **에러 응답 형태를 고정**한다 (§2.6의 에러 코드 + §5 `common/response.py`). 화면은 이 코드로 분기한다
+- **에러 응답 형태를 고정**한다 (§2.6의 에러 코드 + §6 `common/response.py`). 화면은 이 코드로 분기한다
 - **페이지네이션 응답 형태를 고정**한다 (§4.3 커서 방식). 나중에 무한 스크롤로 바꿔도 서버는 그대로다
 - 파일 업로드는 응답에 **접근 URL을 담는다**. 화면이 경로를 조립하게 만들지 않는다
 
@@ -65,6 +65,7 @@ async def create_user(db: TxDep, obj: CreateUser): ...  # 쓰기: 자동 커밋/
 | 전송 객체 | `schema` | `schema.py` | Pydantic. 요청/응답 계약 |
 | 업무 규칙 | `service` | `service.py` | 트랜잭션 내부 로직, 도메인 규칙 |
 | 데이터 접근 | `crud` | `repository.py` | 쿼리만. 규칙 없음 |
+| 외부 서버 | — | `gateway.py` | HTTP 호출 + 응답을 우리 타입으로 변환 (§5.5) |
 | 테이블 | `model` | `model.py` | SQLAlchemy 매핑 |
 
 `crud` → `repository`로 개명. `crud`는 CRUD 5개만 있다는 인상을 주는데 실제로는 모든 쿼리가 여기 산다.
@@ -778,7 +779,155 @@ DELETE /api/v1/comments/{id}                         댓글 삭제             [
 
 ---
 
-## 5. 목표 디렉터리 구조
+## 5. 외부 서버 호출 (upstream)
+
+다른 서버에 HTTP 요청을 보내야 한다. **서버는 A, B, … n개로 늘어난다.**
+
+그래서 서버마다 클래스를 만들지 않는다. 3개째부터 복사-붙여넣기가 되고, 타임아웃 설정을 한 곳에서 빠뜨린다. **`이름 → 설정` 맵 하나**로 두고, 새 서버는 설정 한 줄로 붙인다.
+
+```
+UPSTREAMS={"a":{"base_url":"https://a.example.com"},
+           "b":{"base_url":"https://b.example.com","read_timeout_seconds":10}}
+```
+
+코드 변경은 없다. §3.1과 같은 원칙 — 확장은 런타임 설치가 아니라 **설정과 배포**로.
+
+### 5.1 두 계층으로 쪼갠다
+
+한 파일에 다 넣으면 "재시도 로직"과 "A 서버의 404가 무슨 뜻인가"가 섞인다. 전자는 모든 서버에 같고, 후자는 서버마다 다르다.
+
+| 계층 | 파일 | 아는 것 | 모르는 것 |
+|---|---|---|---|
+| 전송 | `common/http/client.py` | 타임아웃, 재시도, 커넥션 격리, 요청 ID 전파 | **상대가 무슨 서버인지** |
+| 어댑터 | `modules/*/gateway.py` | 경로, 응답 모양, 상태코드의 의미 | 재시도를 몇 번 하는지 |
+
+`common`이 도메인을 모른다는 §2.2가 여기서도 성립한다. `lint-imports`가 막는다.
+
+### 5.2 타임아웃은 4종 전부 명시한다
+
+```python
+httpx.Timeout(connect=2.0, read=5.0, write=5.0, pool=2.0)
+```
+
+**`pool`을 빼먹는 것이 가장 위험하다.** 커넥션 풀 대기에 상한이 없으면, 느려진 업스트림 앞에 우리 요청이 무한정 줄을 선다. 워커가 전부 점유되고 **우리 서버가 같이 죽는다** — 상대의 장애가 우리 장애가 되는 경로다.
+
+`max_connections`를 업스트림별로 두는 이유도 같다(bulkhead). A가 느려져도 B 호출이 커넥션을 얻을 수 있어야 한다.
+
+### 5.3 재시도는 멱등한 것만
+
+| 대상 | 재시도 | 이유 |
+|---|---|---|
+| GET/HEAD/OPTIONS/PUT/DELETE | ○ | HTTP 의미상 멱등 |
+| **POST/PATCH** | **×** | 타임아웃은 "처리되지 않았다"가 아니라 **"결과를 못 봤다"**다. 재시도하면 두 번 처리될 수 있다 |
+| 429, 502, 503, 504 | ○ | 일시적 과부하 |
+| **500** | **×** | 보통 상대의 버그다. 재시도는 장애 중인 서버에 부하만 보탠다 |
+| 그 외 4xx | × | 상대가 확정된 답을 줬다 |
+
+POST를 재시도해야 하면 호출자가 `idempotent=True`로 **명시**한다. 기본값이 안전한 쪽이어야 한다.
+
+백오프에는 지터를 섞는다. 없으면 여러 워커가 같은 시점에 동시에 재시도해서 방금 살아난 서버를 다시 넘어뜨린다. 상대가 준 `Retry-After`는 5초로 캡한다 — "10분 뒤에 오라"를 그대로 믿으면 요청이 매달린다.
+
+### 5.4 실패를 네 가지로 나눈다
+
+| 예외 | 우리 응답 | 무슨 일인가 | 누가 고치나 |
+|---|---|---|---|
+| `UpstreamTimeoutError` | 504 | 재시도해도 응답이 없다 | 상대 (또는 타임아웃 값) |
+| `UpstreamUnavailableError` | 503 | 연결 불가, 또는 429/503 지속 | 상대 |
+| `UpstreamStatusError` | 502 | 2xx가 아닌 확정 응답 | **gateway가 의미를 정한다** |
+| `UpstreamPayloadError` | 502 | 응답이 왔지만 아는 모양이 아니다 | 상대가 계약을 바꿨다 |
+
+**상대의 상태코드를 우리 응답으로 그대로 흘리지 않는다.** 상대가 404를 줬다고 우리가 404를 주면, 클라이언트는 우리 리소스가 없는 건지 남의 리소스가 없는 건지 구분할 수 없다. 의미 부여는 gateway가 한다:
+
+```python
+except UpstreamStatusError as exc:
+    if exc.upstream_status == 404:
+        raise NotFoundError(code='weather.city_unknown') from exc
+    raise                          # 나머지는 502/503으로
+```
+
+마지막 줄이 중요하다. **`upstream.bad_payload`를 500과 구분하는 이유**도 같다 — 우리 버그는 코드를 고치고, 상대의 변경은 어댑터를 고치거나 상대에게 연락한다. 로그에서 갈라져야 대응이 갈라진다.
+
+어느 업스트림이 실패했는지는 **로그에만** 남긴다. 응답 본문에 넣으면 내부 구조가 드러난다 (규칙 #20).
+
+### 5.5 DTO 세 종류를 섞지 않는다 ★
+
+이게 이 절의 핵심이다. 데이터가 세 가지 있고, 소유자가 다르다.
+
+| | 무엇 | 소유자 | 바뀌면 |
+|---|---|---|---|
+| `model.py` | SQLAlchemy 행 | **우리** | 마이그레이션을 쓴다 (§2.3) |
+| `schema.py` | **우리** API 계약 | **우리** | 화면이 깨진다 (§0) |
+| `gateway.py`의 wire DTO | **남의** API 응답 | **상대** | 예고 없이 바뀐다 |
+
+세 번째가 문제다. 상대의 응답을 그대로 쓰면:
+
+- **응답으로 흘리면** 우리 API가 상대의 필드명에 묶인다. 상대가 `cityName`을 `city_name`으로 바꾸면 **우리 클라이언트가 깨진다.** 우리가 통제하지 못하는 계약이 된다.
+- **DB에 그대로 저장하면** 상대의 스키마가 우리 테이블 스키마가 된다. 마이그레이션 히스토리가 남의 릴리스에 끌려간다.
+
+**규칙: wire DTO는 `gateway.py` 밖으로 나가지 않는다.** gateway의 반환 타입은 모듈이 정의한 타입이다. 상대가 응답을 바꾸면 고칠 파일이 정확히 하나다.
+
+```python
+class _WeatherPayload(BaseModel):                  # wire DTO — 밑줄로 시작한다
+    model_config = ConfigDict(extra='ignore')      # 상대가 필드를 더해도 안 깨진다
+    city_name: str = Field(alias='cityName')       # 이름 변환은 여기 한 곳
+    temp_c: float = Field(alias='temperatureCelsius')
+
+@dataclass(frozen=True, slots=True)
+class Weather:                                     # 우리 어휘. 이것만 밖으로 나간다
+    city: str
+    celsius: float
+
+class WeatherGateway(Gateway):
+    upstream = 'weather'                           # 설정의 키
+
+    @classmethod
+    async def fetch(cls, *, upstreams: UpstreamRegistry, city: str) -> Weather:
+        response = await cls.client(upstreams).request('GET', '/weather', params={'city': city})
+        payload = cls.parse(response, _WeatherPayload)
+        return Weather(city=payload.city_name, celsius=payload.temp_c)
+```
+
+`extra='ignore'`가 기본이다. 상대가 필드를 추가하는 것은 흔한 일이고, 그걸로 우리가 깨지면 안 된다. 반대로 **필드가 사라지거나 타입이 바뀌면 실패해야 한다** — 조용히 `None`이 흘러들어가는 것보다 낫다.
+
+**그래서 service가 보는 것은 우리 타입뿐이다.** DB에서 왔는지 남의 서버에서 왔는지 몰라도 된다. 저장이 필요하면 service가 model로 옮긴다.
+
+### 5.6 gateway는 service처럼 stateless다
+
+`db`, `redis`를 인자로 받는 것과 같은 방식으로 `upstreams`를 받는다 (§2.1, §1.3).
+
+```python
+class PostService:
+    @staticmethod
+    async def create(*, db: AsyncSession, upstreams: UpstreamRegistry, ...) -> int:
+        weather = await WeatherGateway.fetch(upstreams=upstreams, city=city)
+```
+
+설정에 없는 이름을 요청하면 **즉시 예외**다. `None`을 돌려주면 호출자가 확인을 잊고, 설정 누락이 엉뚱한 곳에서 `AttributeError`로 나타난다.
+
+### 5.7 기동 시 업스트림을 찔러보지 않는다
+
+lifespan은 DB와 Redis를 확인하지만 **업스트림은 확인하지 않는다.** 남의 서버가 잠깐 죽었다고 우리 배포가 막히면 장애가 전파된다.
+
+같은 이유로 `/health/ready`는 업스트림 상태를 **보고만 하고 판정에 넣지 않는다.**
+
+```json
+{ "status": "ok", "checks": {"database": true, "redis": true},
+  "upstreams": {"a": true, "b": false} }
+```
+
+`b`가 죽었는데 200이다. "우리가 요청을 처리할 수 있는가"와 "연동이 건강한가"는 다른 질문이고, readiness는 앞의 질문에 답한다. 뒤의 질문은 모니터링이 볼 값이다.
+
+검사 대상은 `health_path`를 준 업스트림만이다. 전부 찌르면 우리 readiness 프로브가 남의 서버에 부하를 만든다.
+
+### 5.8 아직 하지 않는 것
+
+- **서킷 브레이커.** 연속 실패 시 호출을 끊어 상대에게 회복 시간을 준다. 타임아웃 + 커넥션 상한 + 재시도 제한으로 최악은 막았고, 브레이커는 상태(실패 카운트)를 워커 간에 공유해야 해서 Redis가 얽힌다. 실제로 필요해지면 추가한다.
+- **응답 캐싱.** Redis가 이미 있으니 붙이기는 쉽지만, 무효화 정책이 업스트림마다 다르다.
+- **분산 추적.** 요청 ID는 이미 전파한다(§0). OTel 스팬 연결은 Phase 6.
+
+---
+
+## 6. 목표 디렉터리 구조
 
 ```
 my-fastapi/
@@ -801,7 +950,8 @@ my-fastapi/
    ├─ common/                   # core만 import
    │  ├─ db/                    #   session, base model, mixin, soft_delete
    │  ├─ cache/                 #   redis 헬퍼
-   │  ├─ security/              #   token encode/decode, hashing — 도메인 무지
+   │  ├─ security/              #   token encode/decode, hashing, Principal — 도메인 무지
+   │  ├─ http/                  #   업스트림 전송 계층 (§5). 상대가 무슨 서버인지 모른다
    │  ├─ errors/                #   예외 타입 + 에러 코드
    │  ├─ pagination.py
    │  ├─ response.py
@@ -810,6 +960,7 @@ my-fastapi/
    │  ├─ auth/                  #   로그인, 토큰 발급, 세션 저장소
    │  ├─ user/
    │  ├─ rbac/
+   │  │  └─ gateway.py          #     외부 서버 어댑터 (§5). 필요한 모듈에만 둔다
    │  ├─ board/                 #   ★ 메인 도메인 (§4)
    │  │  ├─ board/              #     게시판 정의
    │  │  ├─ post/               #     게시글 + view_counter.py
@@ -832,7 +983,7 @@ my-fastapi/
 
 ---
 
-## 6. 구축 순서
+## 7. 구축 순서
 
 우선순위대로. 각 단계가 다음 단계의 전제다. **Phase 5가 목적지고 1~4는 거기까지 가는 길이다.**
 
@@ -850,7 +1001,7 @@ Phase 1에서 추가로 확정한 것:
 - `common/db/base.py` — `Base` + **제약 이름 규칙**. 첫 리비전 전에 정해야 하는 값이다
 - `common/openapi.py` — operation id 고정 + 중복 시 **기동 실패** (§0의 계약)
 - `bootstrap/health.py` — liveness/readiness 분리. liveness가 DB를 보면 순단에 프로세스가 죽는다
-- `tests/unit/test_architecture_rules.py` — §7 규칙표의 "코드리뷰/grep" 항목을 **AST 검사**로 승격
+- `tests/unit/test_architecture_rules.py` — §8 규칙표의 "코드리뷰/grep" 항목을 **AST 검사**로 승격
   (규칙 #1·#3·#4·#5·#10, `sys.exit` 금지). 지금은 공허하게 통과하고, Phase 3부터 일한다
 
 ### Phase 2 — 공용 계층 ✅
@@ -931,7 +1082,7 @@ Phase 3에서 추가로 확정한 것:
 
 ---
 
-## 7. 지켜야 할 규칙 요약
+## 8. 지켜야 할 규칙 요약
 
 | # | 규칙 | 강제 수단 |
 |---|---|---|
@@ -959,6 +1110,10 @@ Phase 3에서 추가로 확정한 것:
 | 22 | soft delete 테이블의 unique 는 `deleted` 를 포함한다 | `test_model_registry.py` |
 | 23 | `raise ...(code=)` 의 코드는 카탈로그에 있어야 한다 | `test_errors.py` (AST) |
 | 24 | 응답 스키마는 허용 목록. 모델을 그대로 직렬화하지 않는다 | 리뷰 + e2e(해시 미노출) |
+| 25 | `httpx.AsyncClient` 생성은 `common/http/registry.py` 하나뿐 | 유닛 테스트가 AST로 검사 |
+| 26 | wire DTO는 `gateway.py` 밖으로 나가지 않는다 | 유닛 테스트가 AST로 검사 |
+| 27 | POST/PATCH는 재시도하지 않는다 (명시 opt-in만) | `common/http/client.py` + 테스트 |
+| 28 | 업스트림 장애가 우리 readiness를 깨뜨리지 않는다 | e2e 테스트 (§5.7) |
 
 ---
 

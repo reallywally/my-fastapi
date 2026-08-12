@@ -24,14 +24,23 @@ async def health() -> dict[str, str]:
 
 @router.get('/health/ready', summary='readiness')
 async def ready(request: Request, response: Response) -> dict[str, object]:
-    checks = {
+    checks: dict[str, bool] = {
         'database': await _check_database(request),
         'redis': await _check_redis(request),
     }
+    upstreams = await _check_upstreams(request)
+
+    # **업스트림 실패로 503 을 내지 않는다.** 남의 서버가 죽었다고 우리를 로드밸런서에서
+    # 빼면 장애가 전파된다. 우리가 여전히 요청을 처리할 수 있는지와, 연동이 건강한지는
+    # 다른 질문이다. 업스트림 상태는 보고만 하고 판정에는 넣지 않는다 (§5).
     ok = all(checks.values())
     if not ok:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return {'status': 'ok' if ok else 'degraded', 'checks': checks}
+
+    body: dict[str, object] = {'status': 'ok' if ok else 'degraded', 'checks': checks}
+    if upstreams:
+        body['upstreams'] = upstreams
+    return body
 
 
 async def _check_database(request: Request) -> bool:
@@ -45,6 +54,31 @@ async def _check_database(request: Request) -> bool:
         logger.exception('database readiness check failed')
         return False
     return True
+
+
+async def _check_upstreams(request: Request) -> dict[str, bool]:
+    """`health_path` 를 준 업스트림만 찔러본다.
+
+    모든 업스트림을 매 프로브마다 호출하면 우리 readiness 가 남의 서버에 부하를 만든다.
+    검사 대상은 설정으로 고른다.
+    """
+    registry = getattr(request.app.state, 'upstreams', None)
+    if registry is None:
+        return {}
+
+    results: dict[str, bool] = {}
+    for name in registry.names():
+        client = registry.get(name)
+        if client.config.health_path is None:
+            continue
+        try:
+            await client.request('GET', client.config.health_path, idempotent=False)
+        except Exception:
+            logger.warning('upstream %s readiness check failed', name)
+            results[name] = False
+        else:
+            results[name] = True
+    return results
 
 
 async def _check_redis(request: Request) -> bool:

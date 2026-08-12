@@ -51,6 +51,45 @@ uv run alembic check            # 모델과 마이그레이션이 어긋나면 �
 > autogenerate 가 에러 없이 **빈 리비전**을 만들고 `alembic check` 도 통과한다.
 > `tests/unit/test_model_registry.py` 가 잡는다.
 
+## 외부 서버 호출 (§5)
+
+서버는 이름 → 설정 맵으로 둔다. **추가는 설정 한 줄이고 코드 변경이 아니다.**
+
+```bash
+UPSTREAMS='{"a":{"base_url":"https://a.example.com","health_path":"/healthz"},
+            "b":{"base_url":"https://b.example.com","read_timeout_seconds":10}}'
+```
+
+호출은 `gateway.py` 에서 한다. **상대의 응답 DTO는 그 파일 밖으로 나가지 않는다** —
+나가면 상대의 필드명이 우리 API 계약이나 테이블 스키마가 된다 (§5.5).
+
+```python
+class _WeatherPayload(BaseModel):                # 상대의 모양. 밑줄로 시작한다
+    model_config = ConfigDict(extra='ignore')
+    city_name: str = Field(alias='cityName')
+
+@dataclass(frozen=True, slots=True)
+class Weather:                                   # 우리 어휘. 이것만 밖으로 나간다
+    city: str
+
+class WeatherGateway(Gateway):
+    upstream = 'a'                               # UPSTREAMS 의 키
+
+    @classmethod
+    async def fetch(cls, *, upstreams, city: str) -> Weather:
+        response = await cls.client(upstreams).request('GET', '/weather', params={'city': city})
+        return Weather(city=cls.parse(response, _WeatherPayload).city_name)
+```
+
+동작하는 템플릿은 `tests/unit/test_gateway_pattern.py` 에 있다 — 문서가 아니라 도는 코드다.
+
+알아둘 것:
+- **POST/PATCH 는 재시도하지 않는다.** 타임아웃은 "처리 안 됐다" 가 아니라 "결과를 못
+  봤다" 다. 필요하면 `idempotent=True` 로 명시한다
+- 상대의 상태코드를 우리 응답으로 흘리지 않는다. `UpstreamStatusError` 를 잡아
+  도메인 에러로 바꾸는 것이 gateway 의 일이다
+- 업스트림이 죽어도 `/health/ready` 는 200 이다. 보고만 하고 판정에 넣지 않는다 (§5.7)
+
 ## 새 모듈 추가하기
 
 `modules/user/` 를 그대로 베낀다 (§6 Phase 3 에서 확정된 템플릿):

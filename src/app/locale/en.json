@@ -16,5 +16,10 @@
   "user.email_taken": "That email is already in use.",
   "user.already_exists": "That user already exists.",
   "user.not_owner": "You can only change your own account.",
-  "user.locked": "This account is locked. Please contact an administrator."
+  "user.locked": "This account is locked. Please contact an administrator.",
+  "upstream.error": "Something went wrong talking to an external service.",
+  "upstream.timeout": "An external service is slow to respond. Please try again shortly.",
+  "upstream.unavailable": "We could not reach an external service.",
+  "upstream.bad_status": "An external service could not handle the request.",
+  "upstream.bad_payload": "We could not make sense of an external service response."
 }

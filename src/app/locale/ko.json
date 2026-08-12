@@ -16,5 +16,10 @@
   "user.email_taken": "이미 사용 중인 이메일입니다.",
   "user.already_exists": "이미 존재하는 사용자입니다.",
   "user.not_owner": "본인 계정만 변경할 수 있습니다.",
-  "user.locked": "잠긴 계정입니다. 관리자에게 문의해 주세요."
+  "user.locked": "잠긴 계정입니다. 관리자에게 문의해 주세요.",
+  "upstream.error": "외부 서비스 연동 중 문제가 발생했습니다.",
+  "upstream.timeout": "외부 서비스 응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.",
+  "upstream.unavailable": "외부 서비스에 연결할 수 없습니다.",
+  "upstream.bad_status": "외부 서비스가 요청을 처리하지 못했습니다.",
+  "upstream.bad_payload": "외부 서비스 응답을 해석할 수 없습니다."
 }

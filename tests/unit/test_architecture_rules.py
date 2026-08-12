@@ -1,4 +1,4 @@
-"""§7 규칙표 중 "코드리뷰/grep" 으로 되어 있던 항목을 테스트로 옮긴 것.
+"""§8 규칙표 중 "코드리뷰/grep" 으로 되어 있던 항목을 테스트로 옮긴 것.
 
 **AST 로 검사한다.** 문자열 검색은 주석과 독스트링을 위반으로 잡는다 — 이 문서화된
 코드베이스에서는 그게 곧 오탐이다. 판단 대상은 실제로 실행되는 호출과 시그니처뿐이다.
@@ -19,7 +19,14 @@ SOURCE_FILES = sorted(APP_DIR.rglob('*.py'))
 SERVICE_AND_REPOSITORY_FILES = [p for p in SOURCE_FILES if p.name in {'service.py', 'repository.py'}]
 
 HTTP_OBJECTS = {'Request', 'Response', 'UploadFile', 'WebSocket', 'BackgroundTasks'}
-IO_RESOURCE_FACTORIES = {'create_async_engine', 'create_engine', 'Redis.from_url', 'ConnectionPool.from_url'}
+IO_RESOURCE_FACTORIES = {
+    'create_async_engine',
+    'create_engine',
+    'Redis.from_url',
+    'ConnectionPool.from_url',
+    'httpx.AsyncClient',
+    'AsyncClient',
+}
 
 
 def _name(path: Path) -> str:
@@ -105,6 +112,40 @@ def test_rule_17_only_one_module_creates_engines():
         lambda tree: any(name.split('.')[-1] == 'create_async_engine' for name in _called_names(tree)),
     )
     assert not offenders, f'engine.py 밖에서 엔진을 만든다: {offenders}'
+
+
+def test_rule_25_only_one_module_creates_http_clients():
+    """규칙 #25 — `httpx.AsyncClient` 는 `common/http/registry.py` 에서만 만든다 (§5).
+
+    타임아웃 4종과 커넥션 상한이 걸린 클라이언트는 그 파일에서만 나온다. 다른 곳에서
+    `AsyncClient()` 를 직접 만들면 httpx 기본값을 쓰게 되고, **pool 대기가 무제한**이라
+    느린 업스트림 앞에 우리 요청이 무한정 줄을 선다.
+    """
+    allowed = {'common/http/registry.py'}
+    offenders = _offenders(
+        [path for path in SOURCE_FILES if _name(path) not in allowed],
+        lambda tree: any(name.split('.')[-1] == 'AsyncClient' for name in _called_names(tree)),
+    )
+    assert not offenders, f'registry.py 밖에서 httpx 클라이언트를 만든다: {offenders}'
+
+
+def test_rule_26_wire_dtos_stay_inside_their_gateway():
+    """규칙 #26 — 업스트림 응답 DTO 는 `gateway.py` 밖으로 나가지 않는다 (§5).
+
+    밖으로 나가면 상대의 필드명이 우리 API 계약이나 테이블 스키마가 된다. wire DTO 는
+    밑줄로 시작하는 이름으로 두고, 다른 파일이 그걸 import 하지 않는지 검사한다.
+    """
+    offenders: list[str] = []
+    for path in SOURCE_FILES:
+        if path.name == 'gateway.py':
+            continue
+        tree = _tree(path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.endswith('gateway'):
+                private = [alias.name for alias in node.names if alias.name.startswith('_')]
+                if private:
+                    offenders.append(f'{_name(path)} → {private}')
+    assert not offenders, f'wire DTO 가 gateway 밖에서 쓰인다: {offenders}'
 
 
 def test_rule_18_sqlite_specifics_do_not_leak_into_modules():

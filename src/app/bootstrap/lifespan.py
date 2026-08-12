@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.common.db.engine import create_engine
+from app.common.http.registry import create_registry
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -28,10 +29,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     engine = create_engine(settings)
     redis = Redis.from_url(settings.redis_dsn, decode_responses=True)
+    upstreams, http_clients = create_registry(settings.upstreams)
 
     app.state.engine = engine
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
     app.state.redis = redis
+    app.state.upstreams = upstreams
 
     try:
         # 기동 시점에 연결을 확인한다. 실패하면 예외가 올라가 기동이 실패한다.
@@ -39,10 +42,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await connection.execute(text('SELECT 1'))
         await redis.ping()
 
+        # 업스트림은 **찔러보지 않는다.** 남의 서버가 잠깐 죽었다고 우리 배포가 막히면
+        # 장애가 전파된다. 도달 여부는 `/health/ready` 가 계속 보고한다.
         logger.info('resources ready (env=%s)', settings.environment)
         yield
     finally:
         # ping 이 실패해도 여기까지 온다 — 열린 자원을 남기지 않는다.
+        for http_client in http_clients:
+            await http_client.aclose()
         await redis.aclose()
         await engine.dispose()
         logger.info('resources disposed')
