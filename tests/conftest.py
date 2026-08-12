@@ -6,8 +6,14 @@
 
 Docker 가 없으면 통합/E2E 는 통째로 skip 된다. 유닛 테스트는 영향받지 않는다 —
 `import` 만으로 아무 연결도 열리지 않기 때문이다 (§2.1).
+
+**탈출구:** `TEST_DATABASE_URL` / `TEST_REDIS_URL` 을 주면 컨테이너를 띄우지 않고
+그 주소를 쓴다. `docker compose up -d` 로 띄워놓고 돌리거나, Docker 를 못 쓰는
+환경(WSL 등)에서 필요하다. **테스트가 스키마를 롤백하므로 개발 DB 를 가리켜도 안전하지만,
+운영 DB 를 넣지 마라.**
 """
 
+import os
 from collections.abc import AsyncGenerator, Iterator
 
 import docker
@@ -52,8 +58,17 @@ async def run_migrations(engine: AsyncEngine) -> None:
 @pytest.fixture(scope='session')
 def containers() -> Iterator[tuple[str, str]]:
     """(postgres_dsn, redis_dsn) 를 돌려준다."""
+    external_db = os.getenv('TEST_DATABASE_URL')
+    external_redis = os.getenv('TEST_REDIS_URL')
+    if external_db and external_redis:
+        yield external_db, external_redis
+        return
+
     if not _docker_available():
-        pytest.skip('Docker 데몬이 없다 — 통합/E2E 테스트를 건너뛴다')
+        pytest.skip(
+            'Docker 데몬이 없다 — 통합/E2E 테스트를 건너뛴다. '
+            'TEST_DATABASE_URL / TEST_REDIS_URL 로 외부 인스턴스를 가리킬 수 있다.'
+        )
 
     with (
         PostgresContainer(POSTGRES_IMAGE, driver='asyncpg') as postgres,

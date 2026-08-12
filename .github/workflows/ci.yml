@@ -38,7 +38,7 @@ jobs:
       - run: uv sync --all-groups
 
       # testcontainers 가 Postgres/Redis 를 띄운다. 러너에 Docker 가 이미 있다.
-      # 커버리지 게이트(fail_under)는 Phase 6 에서 켠다 (§6).
+      # --cov 는 pyproject 의 fail_under=70 을 그대로 적용한다 — 게이트는 이미 켜져 있다.
       - name: pytest
         run: uv run pytest --cov --cov-report=term-missing
 

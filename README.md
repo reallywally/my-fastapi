@@ -27,6 +27,16 @@ uv run lint-imports             # 의존 방향 검사 (§2.2)
 uv run pre-commit install       # 커밋 훅
 ```
 
+Docker 없이 통합/E2E 를 돌려야 하면(WSL 등) 이미 떠 있는 인스턴스를 가리킨다:
+
+```bash
+TEST_DATABASE_URL=postgresql+asyncpg://app:app@localhost:5432/app \
+TEST_REDIS_URL=redis://localhost:6379/0 \
+uv run pytest
+```
+
+테스트가 트랜잭션째 롤백하므로 개발 DB 는 안전하다. 운영 DB 를 넣지 마라.
+
 마이그레이션 추가:
 
 ```bash
