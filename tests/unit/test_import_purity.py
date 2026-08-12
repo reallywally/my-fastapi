@@ -50,7 +50,7 @@ def test_importing_config_without_env_succeeds():
         from app.core.config import get_settings
 
         settings = get_settings()
-        assert settings.database_dsn.startswith('postgresql+asyncpg://')
+        assert settings.database_url.startswith('sqlite+aiosqlite://')
     """)
     assert result.returncode == 0, result.stderr
 

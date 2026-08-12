@@ -12,11 +12,10 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.common.db import Base
+from app.common.db.engine import create_engine
 from app.core.config import get_settings
 
 config = context.config
@@ -28,7 +27,7 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    return get_settings().database_dsn
+    return get_settings().database_url
 
 
 def _configure(**kwargs: object) -> None:
@@ -37,6 +36,9 @@ def _configure(**kwargs: object) -> None:
         compare_type=True,
         compare_server_default=True,
         include_schemas=False,
+        # SQLite 는 ALTER TABLE 이 거의 없다. batch 모드가 임시 테이블로 복사·교체한다.
+        # 이걸 안 켜면 컬럼 변경/삭제 리비전이 실행 시점에 죽는다.
+        render_as_batch=get_settings().is_sqlite,
         **kwargs,
     )
 
@@ -54,7 +56,13 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    engine = create_async_engine(_database_url(), poolclass=pool.NullPool)
+    """엔진은 앱과 **같은 팩토리**로 만든다.
+
+    `create_async_engine` 을 직접 부르면 SQLite 파일의 상위 디렉터리 생성과 PRAGMA
+    (특히 `foreign_keys`) 가 빠진다. 마이그레이션이 FK 를 만드는데 정작 FK 가 꺼진
+    연결에서 도는 상황이 된다.
+    """
+    engine = create_engine(get_settings())
     try:
         async with engine.connect() as connection:
             await connection.run_sync(do_run_migrations)

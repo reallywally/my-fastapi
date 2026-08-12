@@ -92,6 +92,31 @@ def test_rule_3_no_io_resources_at_module_scope():
     assert not offenders, f'모듈 최상위에서 I/O 자원을 만든다: {offenders}'
 
 
+def test_rule_17_only_one_module_creates_engines():
+    """규칙 #17 — 엔진 생성은 `common/db/engine.py` 하나뿐 (§1.6).
+
+    SQLite 는 PRAGMA 를 안 걸면 조용히 틀린다. `create_async_engine` 을 여기저기서
+    부르면 그중 하나는 반드시 FK 가 꺼진 채로 돈다. 실제로 `migrations/env.py` 가
+    그렇게 만들어져서 새 체크아웃에서 `alembic upgrade` 가 실패했다.
+    """
+    allowed = {'common/db/engine.py'}
+    offenders = _offenders(
+        [path for path in SOURCE_FILES if _name(path) not in allowed],
+        lambda tree: any(name.split('.')[-1] == 'create_async_engine' for name in _called_names(tree)),
+    )
+    assert not offenders, f'engine.py 밖에서 엔진을 만든다: {offenders}'
+
+
+def test_rule_18_sqlite_specifics_do_not_leak_into_modules():
+    """규칙 #18 — 방언 전용 처리는 `db/engine.py`·`db/types.py` 안에 가둔다 (§1.6).
+
+    Postgres 로 옮길 때 고쳐야 할 파일이 몇 개인지가 여기서 결정된다.
+    """
+    module_files = [path for path in SOURCE_FILES if _name(path).startswith('modules/')]
+    offenders = [_name(path) for path in module_files if 'sqlite' in path.read_text(encoding='utf-8').lower()]
+    assert not offenders, f'modules/ 안에 SQLite 전용 코드가 있다: {offenders}'
+
+
 @pytest.mark.skipif(not SERVICE_AND_REPOSITORY_FILES, reason='아직 service/repository 가 없다 (Phase 3~)')
 def test_rule_1_no_commit_in_service_or_repository():
     """규칙 #1 — 트랜잭션은 DI 가 결정한다. 서비스/레포는 flush() 만 (§1.1)."""

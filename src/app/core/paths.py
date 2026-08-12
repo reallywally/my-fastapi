@@ -10,3 +10,6 @@ PROJECT_ROOT: Final = SRC_DIR.parent
 
 MIGRATIONS_DIR: Final = PROJECT_ROOT / 'migrations'
 ALEMBIC_INI: Final = PROJECT_ROOT / 'alembic.ini'
+
+#: 에러 메시지 카탈로그 (§2.6). 패키지 안에 있어야 배포본에 따라간다.
+LOCALE_DIR: Final = APP_DIR / 'locale'

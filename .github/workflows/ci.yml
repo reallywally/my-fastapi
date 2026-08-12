@@ -37,25 +37,15 @@ jobs:
           enable-cache: true
       - run: uv sync --all-groups
 
-      # testcontainers 가 Postgres/Redis 를 띄운다. 러너에 Docker 가 이미 있다.
-      # --cov 는 pyproject 의 fail_under=70 을 그대로 적용한다 — 게이트는 이미 켜져 있다.
+      # 외부 서비스가 필요 없다. DB 는 임시 SQLite 파일, Redis 는 fakeredis.
+      # --cov 는 pyproject 의 fail_under=70 을 그대로 적용한다.
       - name: pytest
         run: uv run pytest --cov --cov-report=term-missing
 
   migrations:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: app
-          POSTGRES_PASSWORD: app
-          POSTGRES_DB: app
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      DATABASE_URL: postgresql+asyncpg://app:app@localhost:5432/app
+      DATABASE_URL: sqlite+aiosqlite:///./var/ci.db
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

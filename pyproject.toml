@@ -8,11 +8,14 @@ dependencies = [
     'fastapi>=0.115',
     'uvicorn[standard]>=0.32',
     'sqlalchemy[asyncio]>=2.0.36',
-    'asyncpg>=0.30',
     'alembic>=1.14',
     'pydantic>=2.10',
     'pydantic-settings>=2.7',
     'redis>=5.2',
+    "aiosqlite>=0.22.1",
+    "msgspec>=0.21.1",
+    "pyjwt>=2.13.0",
+    "pwdlib[argon2]>=0.3.0",
 ]
 
 [dependency-groups]
@@ -21,10 +24,10 @@ dev = [
     'pytest-asyncio>=0.25',
     'pytest-cov>=6.0',
     'httpx>=0.28',
-    'testcontainers[postgres,redis]>=4.9',
     'ruff>=0.9',
     'import-linter>=2.1',
     'pre-commit>=4.0',
+    "fakeredis>=2.37.0",
 ]
 
 [build-system]
@@ -84,7 +87,8 @@ ban-relative-imports = 'all'
 known-first-party = ['app']
 
 [tool.ruff.lint.per-file-ignores]
-'tests/**' = ['S101', 'ANN', 'ARG', 'PLR2004', 'S603', 'S607']
+# S105/S106: 테스트는 리터럴 비밀키를 쓴다. 그게 테스트가 자족적이라는 뜻이다.
+'tests/**' = ['S101', 'ANN', 'ARG', 'PLR2004', 'S105', 'S106', 'S603', 'S607']
 'migrations/**' = ['ANN', 'ERA', 'INP001']
 
 # -------------------------------------------------------------- pytest (§2.8)

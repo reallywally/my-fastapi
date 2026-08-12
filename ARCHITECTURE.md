@@ -105,8 +105,31 @@ boolean이면 `unique(username)` 때문에 삭제된 아이디를 재사용할 �
 - **ruff** 촘촘하게 (`ANN`으로 타입 힌트 강제, `line-length=120`, `quote-style='single'`)
 - **msgspec** 기반 `JSONResponse` — orjson보다 빠르고 Pydantic v2와 궁합이 좋다
 - **OpenTelemetry + Prometheus** — 처음부터 붙인다. 나중에 붙이면 계측 지점을 놓친다
-- **snowflake PK 옵션** — 분산 환경 대비. 기본은 `BIGSERIAL`, 설정으로 전환
 - **`ensure_unique_route_names` / `simplify_operation_ids`** — OpenAPI 클라이언트 생성 품질을 위해 유지
+
+### 1.6 DB는 SQLite
+
+**결정: SQLite + aiosqlite.** 서버 프로세스가 없고, 백업이 파일 복사고, 테스트가 Docker 없이 돈다. 게시판 하나 규모에서 Postgres를 세우는 비용이 이득보다 크다.
+
+값은 있지만 **공짜가 아니다.** 아래는 설정하지 않으면 조용히 틀리는 것들이고, 전부 `common/db/engine.py`가 처리한다.
+
+| SQLite 기본값 | 증상 | 대응 |
+|---|---|---|
+| `foreign_keys=OFF` | FK를 선언해도 아무 일도 안 일어난다. 데이터가 깨진 뒤에 안다 | PRAGMA로 ON |
+| `journal_mode=delete` | 읽기가 쓰기에 막힌다 | WAL |
+| `busy_timeout=0` | 동시 쓰기에서 즉시 `database is locked` | 5초 |
+| 드라이버가 트랜잭션을 임의로 연다 | DDL 앞에서 커밋이 새고 SAVEPOINT가 어긋난다 → **테스트 롤백 격리(§2.8)가 깨진다** | `isolation_level=None` + 명시적 `BEGIN` |
+| `BIGINT PRIMARY KEY`는 rowid 별칭이 아니다 | **자동 증가하지 않는다.** id를 손으로 안 넣으면 NULL | `BigInteger().with_variant(Integer, 'sqlite')` |
+| `DateTime(timezone=True)`가 naive를 돌려준다 | aware와 비교하는 순간 `TypeError` | `UTCDateTime` TypeDecorator |
+| `ALTER TABLE`이 거의 없다 | 컬럼 변경·삭제 리비전이 실행 시점에 죽는다 | alembic `render_as_batch=True` |
+
+**포기하는 것:**
+- **§4.8 전문검색을 다시 짜야 한다.** `TSVECTOR` + GIN은 SQLite에 없다. FTS5 가상 테이블로 간다 (§4.8 개정)
+- **쓰기는 한 번에 하나다.** WAL이 읽기를 풀어줄 뿐 쓰기 직렬화는 그대로다 → **§4.5 조회수 버퍼링이 선택이 아니라 필수가 된다**
+- 수평 확장 불가. 필요해지는 시점이 곧 Postgres로 옮기는 시점이다
+- snowflake PK 옵션은 접는다. 분산 쓰기가 없으면 의미가 없다
+
+**옮길 때를 대비해 지금 지키는 것:** 모델은 방언 중립으로 쓰고, SQLite 전용 처리는 `common/db/engine.py`와 `common/db/types.py` **두 파일에 가둔다.** 서비스·레포지토리에 `sqlite` 라는 단어가 나오면 잘못 짠 것이다.
 
 ---
 
@@ -346,7 +369,7 @@ async def update_permission(*, db, actor_id: int, pk: int): ...
 
 ```
 tests/
-├─ conftest.py          # testcontainers로 Postgres/Redis 기동
+├─ conftest.py          # 임시 SQLite 파일 + fakeredis. Docker 불필요
 ├─ factories.py         # 테스트 데이터 팩토리
 ├─ unit/                # 순수 로직. DB·Redis 없음. 밀리초 단위
 ├─ integration/         # repository ↔ 실제 DB
@@ -356,15 +379,16 @@ tests/
 ```python
 # conftest.py 핵심
 @pytest.fixture(scope='session')
-async def app_with_test_resources():
-    async with PostgresContainer('postgres:16') as pg, RedisContainer() as rd:
-        app = create_app()
-        app.state.engine = create_async_engine(pg.get_connection_url())
-        app.state.session_factory = async_sessionmaker(app.state.engine, expire_on_commit=False)
-        app.state.redis = Redis.from_url(rd.get_connection_url())
-        await run_migrations(app.state.engine)   # create_all 아님. alembic으로
-        yield app
+async def app_with_test_resources(settings):        # settings: 임시 디렉터리의 SQLite 파일
+    app = create_app()
+    app.state.engine = create_engine(settings)      # 앱과 같은 팩토리 (§1.6의 PRAGMA가 걸린다)
+    app.state.session_factory = async_sessionmaker(app.state.engine, expire_on_commit=False)
+    app.state.redis = FakeAsyncRedis(decode_responses=True)   # §2.1이 예고한 그대로
+    await run_migrations(app.state.engine)          # create_all 아님. alembic으로
+    yield app
 ```
+
+**Docker가 필요 없다.** DB는 임시 파일, Redis는 fakeredis. 진짜 Redis로 돌리려면 `TEST_REDIS_URL`을 준다.
 
 - 각 테스트는 **트랜잭션 안에서 돌고 롤백**한다. 테스트 간 격리를 DB truncate로 하지 않는다.
 - `pytest-asyncio` + `httpx.AsyncClient`. FBA처럼 sync `TestClient`를 쓰면 async 경로를 제대로 못 탄다.
@@ -526,6 +550,7 @@ class Post(Base, DateTimeMixin, SoftDeleteMixin):
     __table_args__ = (
         Index('ix_post_list', 'board_id', 'deleted', 'id'),    # 목록 커서 (§4.3)
         Index('ix_post_author', 'author_id', 'deleted'),
+        # 전문검색은 별도 FTS5 가상 테이블이다 (§4.8). 여기에 컬럼을 두지 않는다.
     )
 ```
 
@@ -605,7 +630,7 @@ class CommentService:
 ### 4.5 조회수 — 읽기가 쓰기가 되면 안 된다
 
 글을 볼 때마다 `UPDATE post SET view_count = view_count + 1`을 하면:
-- 인기 글 **한 행에 UPDATE가 몰려** row lock 경합이 난다
+- 인기 글 **한 행에 UPDATE가 몰려** 경합이 난다. **SQLite는 쓰기가 DB 전체에 하나뿐이라(§1.6) 이게 서버 전체를 막는다** — 선택이 아니라 필수인 이유
 - **읽기 요청이 쓰기 트랜잭션이 된다.** §1.1에서 `SessionDep`/`TxDep`을 나눈 의미가 사라진다
 
 **Redis에 누적하고 주기적으로 반영한다.**
@@ -686,19 +711,31 @@ soft delete(§1.4, §2.4)라 행은 남는다. 문제는 트리가 끊기는 경
 
 ### 4.8 검색
 
-`LIKE '%키워드%'`는 인덱스를 못 탄다. Postgres FTS로 시작한다.
+`LIKE '%키워드%'`는 인덱스를 못 탄다. **SQLite FTS5**를 쓴다 — §1.6에서 Postgres를 접었으므로 `TSVECTOR` + GIN은 없다.
 
-```python
-search_vector: Mapped[str] = mapped_column(
-    TSVECTOR,
-    Computed("to_tsvector('simple', title || ' ' || content)", persisted=True),
-)
-# Index('ix_post_search', 'search_vector', postgresql_using='gin')
+`TSVECTOR` 생성 컬럼과 결정적으로 다른 점: FTS5는 **별도 가상 테이블**이라 원본과 자동으로 동기화되지 않는다.
+
+```sql
+CREATE VIRTUAL TABLE post_fts USING fts5(
+    title, content,
+    content='post', content_rowid='id',   -- external content: 본문을 중복 저장하지 않는다
+    tokenize='unicode61'
+);
 ```
 
-- 설정은 `simple`로 시작한다. 한국어 형태소 분석이 실제로 필요해지면 그때 별도 검색엔진을 붙인다 — §3.1과 같은 원칙: **필요해진 뒤에, 정적으로**
-- 생성 컬럼이므로 앱이 인덱싱 타이밍을 신경 쓸 필요가 없다
-- 검색도 §4.3의 커서 페이지네이션을 쓴다. 랭킹 정렬이 필요해지면 커서 키가 `(rank, id)` 복합이 된다
+동기화는 **트리거로 DB에 맡긴다.** 앱이 인덱싱을 기억해야 하면 §2.4의 `deleted=0`과 같은 실수가 반복된다 — 어딘가에서 반드시 빠뜨린다.
+
+```sql
+CREATE TRIGGER post_fts_insert AFTER INSERT ON post BEGIN
+    INSERT INTO post_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+END;
+-- update / delete 트리거도 같이. external content 는 삭제 시 'delete' 명령 행을 넣어야 한다
+```
+
+- 가상 테이블과 트리거는 alembic이 autogenerate하지 못한다. **리비전을 손으로 쓴다** — 그래서 §2.3의 "마이그레이션이 유일한 소스" 가 여기서 더 중요해진다
+- 토크나이저는 `unicode61`로 시작한다. **한국어 형태소 분석은 안 된다** — 어절 단위 매칭이다. 실제로 부족해지면 그때 검색엔진을 붙인다 (§3.1과 같은 원칙: 필요해진 뒤에, 정적으로)
+- **soft delete와 FTS는 자동으로 연결되지 않는다.** 전역 필터(§2.4)는 ORM 이벤트라 가상 테이블에 안 붙는다. FTS 결과를 `post`와 조인해서 걸러야 한다
+- 검색도 §4.3의 커서 페이지네이션을 쓴다. `rank` 정렬이 필요해지면 커서 키가 `(rank, id)` 복합이 된다
 
 ### 4.9 첨부파일
 
@@ -816,12 +853,22 @@ Phase 1에서 추가로 확정한 것:
 - `tests/unit/test_architecture_rules.py` — §7 규칙표의 "코드리뷰/grep" 항목을 **AST 검사**로 승격
   (규칙 #1·#3·#4·#5·#10, `sys.exit` 금지). 지금은 공허하게 통과하고, Phase 3부터 일한다
 
-### Phase 2 — 공용 계층
-- [ ] `common/db/` base model, `DateTimeMixin`, `SoftDeleteMixin`(deleted=id 방식)
-- [ ] `common/db/soft_delete.py` — `do_orm_execute` 전역 필터
-- [ ] `common/errors/` — 에러 **코드** 체계, 예외 핸들러, i18n 카탈로그
-- [ ] `common/response.py` — msgspec 응답, 표준 래퍼
-- [ ] `common/security/` — 토큰 encode/decode만. 도메인 import 금지
+### Phase 2 — 공용 계층 ✅
+- [x] `common/db/` base model, `DateTimeMixin`, `SoftDeleteMixin`(deleted=id 방식)
+- [x] `common/db/soft_delete.py` — `do_orm_execute` 전역 필터 + `soft_delete()` 헬퍼
+- [x] `common/errors/` — 에러 **코드** 체계, 예외 핸들러, i18n 카탈로그(`locale/{ko,en}.json`)
+- [x] `common/response.py` — msgspec 응답, 에러 응답 계약
+- [x] `common/security/` — 토큰 encode/decode + argon2 해싱. 도메인 import 0
+
+DB를 SQLite로 바꾸면서 같이 들어간 것 (§1.6):
+- [x] `common/db/engine.py` — PRAGMA(FK/WAL/busy_timeout) + 명시적 `BEGIN`. **엔진을 만드는 유일한 함수**
+- [x] `common/db/types.py` — `BigIntPK`(SQLite 자동증가), `UTCDateTime`(tz 보존)
+- [x] alembic `render_as_batch`, `migrations/env.py`도 같은 엔진 팩토리 사용
+- [x] 테스트에서 testcontainers 제거 → 임시 SQLite 파일 + `fakeredis`. **Docker 불필요**
+
+Phase 2에서 추가로 확정한 것:
+- `common/pagination.py` — §4.3의 `Page{items, next_cursor, has_next}`. Phase 5에서 쓰지만
+  화면이 처음부터 의존하는 계약이라(§0) 지금 고정한다. `total`은 넣지 않는다
 
 ### Phase 3 — 첫 모듈 (`user`)로 패턴 확정
 - [ ] `modules/user/` 5파일 전부 + **테스트 3종(unit/integration/e2e) 동시에**
@@ -877,6 +924,10 @@ Phase 1에서 추가로 확정한 것:
 | 14 | 소유권 비교는 라우터가 넘긴 `actor_id`로만 | e2e 테스트 (타인 글 수정 → 403) |
 | 15 | `board` 컨텍스트 내부 방향: comment/attachment → post → board | `lint-imports` (CI) |
 | 16 | 화면용 코드 없음 — 템플릿·정적파일·세션쿠키 금지 | 리뷰 (§0) |
+| 17 | 엔진 생성은 `common/db/engine.py` 하나뿐 | 유닛 테스트가 AST로 검사 |
+| 18 | SQLite 전용 코드는 `db/engine.py`·`db/types.py` 밖으로 안 나간다 | 리뷰 (§1.6) |
+| 19 | 시각은 aware UTC. naive 저장은 거부된다 | `UTCDateTime` 이 예외 |
+| 20 | 5xx 응답 본문에 내부 정보 금지 | e2e 테스트 (§2.6) |
 
 ---
 

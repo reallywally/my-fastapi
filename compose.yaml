@@ -1,4 +1,4 @@
-# 로컬 개발용 자원만 띄운다.
+# 로컬 개발용 자원. **DB 는 여기 없다** — SQLite 는 파일이라 띄울 서버가 없다.
 #
 # `migrate` → `api` 순서를 보장하는 배포용 서비스는 Phase 6 에서 추가한다 (§2.3, §6).
 # 앱은 여기서 돌리지 않는다:
@@ -6,20 +6,6 @@
 #     uv run uvicorn app.main:app --reload
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
-      POSTGRES_DB: app
-    ports: ['5432:5432']
-    volumes: ['postgres-data:/var/lib/postgresql/data']
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U app']
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   redis:
     image: redis:7-alpine
     ports: ['6379:6379']
@@ -28,6 +14,3 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-
-volumes:
-  postgres-data:

@@ -7,11 +7,23 @@ from app.core.config import Settings
 from app.core.constants import Environment
 
 
-def test_defaults_allow_import_without_env():
+@pytest.fixture
+def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """설정 관련 환경변수를 걷어낸다.
+
+    conftest 의 `settings` 픽스처가 세션 내내 ENVIRONMENT 등을 덮어쓰기 때문에,
+    "기본값" 을 검사하려면 명시적으로 비워야 한다. 테스트 실행 순서에 의존하지 않는다.
+    """
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name.upper(), raising=False)
+
+
+def test_defaults_allow_import_without_env(clean_env):
     settings = Settings()
 
     assert settings.environment is Environment.local
-    assert settings.database_dsn.startswith('postgresql+asyncpg://')
+    assert settings.database_url.startswith('sqlite+aiosqlite://')
+    assert settings.is_sqlite
     assert settings.redis_dsn.startswith('redis://')
     assert settings.cors_allow_origins == ()
 

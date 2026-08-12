@@ -6,10 +6,12 @@
 
 from fastapi import FastAPI
 
+from app.bootstrap.exception_handlers import register_exception_handlers
 from app.bootstrap.lifespan import lifespan
 from app.bootstrap.middleware import register_middleware
 from app.bootstrap.router import register_routers
 from app.common.openapi import ensure_unique_operation_ids, simplify_operation_id
+from app.common.response import MsgspecJSONResponse
 from app.core.config import get_settings
 
 
@@ -21,6 +23,7 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version=settings.app_version,
         lifespan=lifespan,
+        default_response_class=MsgspecJSONResponse,
         generate_unique_id_function=simplify_operation_id,
         openapi_url=f'{settings.api_prefix}/openapi.json' if docs_enabled else None,
         docs_url='/docs' if docs_enabled else None,
@@ -28,6 +31,7 @@ def create_app() -> FastAPI:
     )
 
     register_middleware(app)
+    register_exception_handlers(app)
     register_routers(app)
 
     # 계약 위반은 기동 시점에 터뜨린다 (§0).

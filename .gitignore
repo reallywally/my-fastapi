@@ -31,3 +31,11 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# SQLite (DB 는 파일이다 — 절대 커밋하지 않는다)
+var/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
