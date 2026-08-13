@@ -15,6 +15,8 @@
 from fastapi import APIRouter
 
 from app.modules.board.board.router import router as _board_router
+from app.modules.board.comment.router import post_router as _comment_post_router
+from app.modules.board.comment.router import router as _comment_router
 from app.modules.board.post.router import board_router as _post_board_router
 from app.modules.board.post.router import router as _post_router
 
@@ -26,5 +28,7 @@ router = APIRouter()
 router.include_router(_board_router)
 router.include_router(_post_board_router)
 router.include_router(_post_router)
+router.include_router(_comment_post_router)
+router.include_router(_comment_router)
 
 __all__ = ['router']

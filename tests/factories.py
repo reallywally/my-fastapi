@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.common.security import hash_password
 from app.modules.board.board.model import Board
 from app.modules.board.board.repository import board_repository
+from app.modules.board.comment.model import Comment
+from app.modules.board.comment.repository import comment_repository
 from app.modules.board.post.model import Post
 from app.modules.board.post.repository import post_repository
 from app.modules.user.model import User
@@ -87,3 +89,28 @@ async def create_post(db: AsyncConnection, *, board_id: int, author_id: int, **o
 
 async def create_posts(db: AsyncConnection, count_: int, *, board_id: int, author_id: int, **overrides: Any):
     return [await create_post(db, board_id=board_id, author_id=author_id, **overrides) for _ in range(count_)]
+
+
+def comment_fields(**overrides: Any) -> dict[str, Any]:
+    n = next(_sequence)
+    return {'content': f'댓글 {n}'} | overrides
+
+
+async def create_comment(
+    db: AsyncConnection,
+    *,
+    post_id: int,
+    author_id: int,
+    parent: Comment | None = None,
+    **overrides: Any,
+) -> Comment:
+    """`parent` 를 주면 답글이 된다 — path·depth 는 레포지토리가 계산한다 (§4.2)."""
+    return await comment_repository.insert(
+        db,
+        post_id=post_id,
+        author_id=author_id,
+        parent_id=parent.id if parent else None,
+        parent_path=parent.path if parent else None,
+        depth=parent.depth + 1 if parent else 0,
+        **comment_fields(**overrides),
+    )

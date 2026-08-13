@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.common.errors import ForbiddenError, NotFoundError
 from app.common.pagination import Page
 from app.common.security import Principal
+from app.modules.board.board.service import board_service
 from app.modules.board.post.model import Post, PostStatus
 from app.modules.board.post.repository import post_repository
 from app.modules.board.post.schema import CreatePostRequest, PostSummaryResponse, UpdatePostRequest
@@ -38,6 +39,11 @@ class PostService:
     async def get(*, db: AsyncConnection, pk: int) -> Post:
         """상세.
 
+        **게시판의 읽기 권한을 여기서 확인한다** (§4.6, §4.10 의 `[read_role]`).
+        `/posts/{id}` 는 `slug` 를 거치지 않는 평평한 경로라 `require_board` 가 붙지
+        않는다. 확인하지 않으면 비공개 게시판의 글이 id 만 알면 읽힌다 — 목록은 막고
+        상세는 여는 것은 막은 것이 아니다.
+
         **초안은 없는 것으로 취급한다.** 작성자 본인에게 보여주려면 주체가 필요한데
         (Phase 5), 그때까지 열어두면 남의 초안이 공개된다. 404 는 안전한 쪽으로 틀린다.
 
@@ -47,6 +53,7 @@ class PostService:
         post = await post_repository.get(db, pk)
         if post is None or post.status is not PostStatus.published:
             raise NotFoundError(code='post.not_found')
+        await board_service.readable(db=db, board_id=post.board_id)
         return post
 
     @staticmethod

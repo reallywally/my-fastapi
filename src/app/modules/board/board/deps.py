@@ -36,8 +36,9 @@ def require_board(permission: Permission) -> Callable[..., Coroutine[Any, Any, B
 
     async def _dep(db: ConnDep, slug: str) -> Board:
         board = await board_service.get_by_slug(db=db, slug=slug)
-        required = board.read_role if permission == 'read' else board.write_role
-        if required != ANONYMOUS:
+        if permission == 'read':
+            board_service.assert_readable(board)
+        elif board.write_role != ANONYMOUS:
             # 역할 판정은 Phase 5. 주체가 없는 지금은 통과시킬 근거가 없다.
             raise UnauthorizedError(code='auth.unauthorized')
         return board

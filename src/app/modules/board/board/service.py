@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.common.errors import ConflictError, ForbiddenError, NotFoundError
+from app.common.errors import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
 from app.common.security import Principal
 from app.modules.board.board.model import Board
 from app.modules.board.board.repository import board_repository
@@ -50,6 +50,30 @@ class BoardService:
         board = await board_repository.get_by_slug(db, slug)
         if board is None:
             raise NotFoundError(code='board.not_found')
+        return board
+
+    @staticmethod
+    def assert_readable(board: Board) -> None:
+        """게시판 읽기 접근 판정 (§4.6). **접근 규칙은 board 슬라이스가 소유한다.**
+
+        `deps.py` 의 `require_board` 는 `slug` 로 들어오는 경로에서 이걸 쓰고,
+        `post` 와 `comment` 는 이미 손에 든 `board_id` 로 이걸 쓴다. 규칙이 두 벌이
+        되면 한쪽만 고치는 날이 오고, 그날 비공개 게시판이 열린다.
+
+        지금 판정하는 것은 `read_role == 'anonymous'` 하나뿐이다 — 역할 계층은
+        Phase 5 이고, 주체가 없으면 통과시킬 근거도 없다.
+        """
+        if not board.is_public:
+            raise UnauthorizedError(code='auth.unauthorized')
+
+    @classmethod
+    async def readable(cls, *, db: AsyncConnection, board_id: int) -> Board:
+        """`board_id` 로 게시판을 읽고 접근을 검사한다. `post`·`comment` 가 쓴다."""
+        board = await board_repository.get(db, board_id)
+        if board is None:
+            # 글은 살아 있는데 게시판이 지워진 경우. 글로 가는 경로가 없어야 한다 (§4.7).
+            raise NotFoundError(code='board.not_found')
+        cls.assert_readable(board)
         return board
 
     @staticmethod
