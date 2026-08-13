@@ -28,6 +28,11 @@ def _build_app() -> FastAPI:
     async def not_found() -> None:
         raise NotFoundError(code='post.not_found')
 
+    @router.get('/unknown-code')
+    async def unknown_code() -> None:
+        # 카탈로그에 절대 넣지 않는 코드. 폴백 경로를 검증하기 위한 것이다.
+        raise NotFoundError(code='probe.never_registered')
+
     @router.get('/forbidden')
     async def forbidden() -> None:
         raise ForbiddenError(code='post.not_owner', details={'post_id': 7})
@@ -94,10 +99,15 @@ async def test_message_is_localised_by_accept_language(probe_app):
 
 
 async def test_unknown_code_falls_back_to_the_code_itself(probe_app):
-    """`post.not_found` 는 아직 카탈로그에 없다 (Phase 5). 500 이 아니라 코드가 나와야 한다."""
-    response = await _get(probe_app, '/not-found')
+    """카탈로그에 없는 코드는 500 이 아니라 코드 자체가 나와야 한다.
 
-    assert response.json()['error']['message'] == 'post.not_found'
+    화면은 `code` 로 분기하므로 (§0) 문구가 없는 것은 장애가 아니다. 번역 누락은
+    `test_errors.py` 가 따로 잡는다.
+    """
+    response = await _get(probe_app, '/unknown-code')
+
+    assert response.status_code == 404
+    assert response.json()['error']['message'] == 'probe.never_registered'
 
 
 async def test_http_exception_maps_to_a_code(probe_app):

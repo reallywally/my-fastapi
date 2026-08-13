@@ -120,7 +120,7 @@ async def test_list_walks_all_pages_via_next_cursor(client, db):
 
 
 async def test_update_requires_authentication(client, db):
-    """Phase 4 까지 `modules/user/deps.py` 가 401 을 낸다 — 가짜 주체를 넣지 않는다."""
+    """Phase 5 까지 `modules/user/deps.py` 가 401 을 낸다 — 가짜 주체를 넣지 않는다."""
     user = await create_user(db)
 
     response = await client.patch(f'{USERS}/{user.id}', json={'nickname': '변경'})

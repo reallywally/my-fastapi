@@ -1051,7 +1051,7 @@ my-fastapi/
 
 ## 7. 구축 순서
 
-우선순위대로. 각 단계가 다음 단계의 전제다. **Phase 5가 목적지고 1~4는 거기까지 가는 길이다.**
+우선순위대로. 각 단계가 다음 단계의 전제다. **Phase 4가 목적지고 1~3은 거기까지 가는 길이다.**
 
 ### Phase 1 — 뼈대 (여기서 타협하면 나중에 못 고친다) ✅
 - [x] `core/config.py` — pydantic-settings, `.env.example` 동기화(테스트로 강제)
@@ -1091,7 +1091,7 @@ ORM을 걷어내고 Core로 내려오면서 같이 들어간 것 (§1.6):
 - [x] `tests/unit/test_dialect_portability.py` — 모든 문장을 3개 방언으로 컴파일
 
 Phase 2에서 추가로 확정한 것:
-- `common/pagination.py` — §4.3의 `Page{items, next_cursor, has_next}`. Phase 5에서 쓰지만
+- `common/pagination.py` — §4.3의 `Page{items, next_cursor, has_next}`. Phase 4에서 쓰지만
   화면이 처음부터 의존하는 계약이라(§0) 지금 고정한다. `total`은 넣지 않는다
 
 ### Phase 3 — 첫 모듈 (`user`)로 패턴 확정 ✅
@@ -1121,22 +1121,18 @@ Phase 3에서 추가로 확정한 것:
   서로를 import하지 않게 한다
 - `tests/factories.py` — argon2 해시를 프로세스당 한 번만 계산한다. 안 하면 테스트가 느려진다
 - `migrations/env.py` 의 `render_item` — 커스텀 타입의 **import까지** 렌더링한다
-- **인증은 Phase 4다.** `modules/user/deps.py` 가 지금은 401을 낸다. 가짜 주체를 넣으면
-  인가가 걸린 척하는 엔드포인트가 되고, 그게 Phase 4까지 살아남으면 그대로 구멍이다.
+- **인증은 Phase 5다.** `modules/user/deps.py` 가 지금은 401을 낸다. 가짜 주체를 넣으면
+  인가가 걸린 척하는 엔드포인트가 되고, 그게 Phase 5까지 살아남으면 그대로 구멍이다.
   라우트를 지금 노출하는 이유는 §0 — OpenAPI 계약이 확정되어야 화면 작업을 병행할 수 있다
 
-### Phase 4 — 인증/인가
-- [ ] `modules/auth/` — 로그인, 리프레시, `UserSessionStore`(캐시 무효화 단일 지점)
-- [ ] `modules/rbac/` — 권한 검사를 `Depends`로
-- [ ] 잠긴 계정·잠긴 역할의 즉시 무효화 테스트
-
-### Phase 5 — 게시판 (§4) ★메인 비즈니스
+### Phase 4 — 게시판 (§4) ★메인 비즈니스
 순서가 곧 의존 방향이다. 각 항목은 테스트와 같은 PR로 간다.
 
-- [ ] `board/board/` — 게시판 CRUD, `slug` 조회, `require_board` deps (§4.6)
-- [ ] `board/post/` — 작성/수정/삭제 + **keyset 목록** (§4.3)
-  - [ ] 소유권 검사 e2e: *타인 글 수정 → 403* (§4.6의 FBA 버그 재발 방지)
-  - [ ] 커서 페이지네이션: 페이징 중 새 글이 들어와도 중복·누락 없음
+- [x] `board/board/` — 게시판 CRUD, `slug` 조회, `require_board` deps (§4.6)
+- [x] `board/post/` — 작성/수정/삭제 + **keyset 목록** (§4.3)
+  - [x] 소유권 검사: *타인 글 수정 → 403* (§4.6의 FBA 버그 재발 방지)
+  - [x] 커서 페이지네이션: 페이징 중 새 글이 들어와도 중복·누락 없음
+  - [x] 고정글은 별도 쿼리로 첫 페이지에만. 커서에 영향을 주지 않는다
 - [ ] `board/comment/` — `path` 기반 트리, 깊이 1단 제한 (§4.2)
   - [ ] `comment_count` 갱신이 같은 트랜잭션인지 (§4.4) — 롤백 시 카운트도 롤백
   - [ ] 자식 있는 댓글 삭제 → `is_removed` 묘비, 자식은 계속 보임 (§4.7)
@@ -1144,8 +1140,32 @@ Phase 3에서 추가로 확정한 것:
   - [ ] 상세 조회가 여전히 `ConnDep`인지 (쓰기 트랜잭션이 아님)
   - [ ] **Redis 다운 시에도 조회 200** — fake redis로 예외 주입
 - [ ] `board/attachment/` — 라우터가 `UploadFile` 처리, 서비스는 원시 타입만 (§4.9)
-- [ ] FTS 검색 + GIN 인덱스 (§4.8)
+- [ ] FTS5 가상 테이블 + 동기화 트리거 (§4.8)
 - [ ] `comment_count` 정합성 보정 배치 + 고아 첨부 정리 배치
+
+`board` + `post` 까지 오면서 확정한 것:
+- **컨텍스트 내부 계약이 린트로 존재한다.** `.importlinter` 의 `board-internal` 이
+  `post → board` 방향을 못박는다. `comment`·`attachment` 는 `post` 위에 한 줄 더 붙는다
+- **`bump_comment_count` 는 `post` 가 소유한다.** 댓글이 `post` 테이블을 직접 건드리면
+  §4.1 의 의존 방향이 역류한다 — 쿼리를 미리 만들어 두고 `comment` 가 부르게 한다
+- **인증이 없는 동안의 권한 판정.** `require_board` 는 `read_role == 'anonymous'` 만
+  통과시키고 나머지는 401 이다. 역할 계층은 Phase 5 — 주체가 없으니 판정할 것도 없다
+- **초안(`draft`)은 404 다.** 작성자 본인에게 보여주려면 주체가 필요하고, 그때까지
+  열어두면 남의 초안이 공개된다
+- **쓰기 라우트는 본문 검증보다 인증이 먼저다.** 인증 안 된 호출자에게 422 를 주면
+  어떤 필드에 어떤 제약이 걸렸는지 알려주는 셈이다
+
+### Phase 5 — 인증/인가
+- [ ] `modules/auth/` — 로그인, 리프레시, `UserSessionStore`(캐시 무효화 단일 지점)
+- [ ] `modules/rbac/` — 권한 검사를 `Depends`로. §4.6 의 `read_role`/`write_role` 이 여기서 실제로 걸린다
+- [ ] 잠긴 계정·잠긴 역할의 즉시 무효화 테스트
+- [ ] Phase 4 에서 401 로 막아둔 쓰기 엔드포인트가 실제 주체로 도는지 e2e
+
+**왜 게시판 뒤로 갔나:** 인증은 게시판의 전제가 아니라 **게시판 위에 얹는 것**이다.
+읽기(`read_role='anonymous'`)는 주체 없이 성립하고, 쓰기는 `PrincipalDep` 가 401 을 내는
+채로 계약(§0)만 먼저 확정해두면 된다 — Phase 3 의 `user` 모듈이 이미 그 모양이다.
+반대 순서였다면 인증을 먼저 만들고 그것을 쓸 도메인이 없어서, 무엇이 필요한지 모르는 채로
+역할 모델을 정하게 된다.
 
 ### Phase 6 — 운영
 - [ ] `common/observability/` — OTel, Prometheus

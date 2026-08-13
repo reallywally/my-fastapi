@@ -5,7 +5,7 @@ FBA 의 `common/security/jwt.py` 는 `User` 모델과 `crud` 를 import 했다. 
 15곳에 흩뿌렸다.
 
 **여기에는 도메인이 없다.** 이 모듈이 아는 것은 "문자열 subject" 뿐이다.
-"토큰 → 사용자 로드"는 `modules/auth/deps.py` 의 일이다 (Phase 4).
+"토큰 → 사용자 로드"는 `modules/auth/deps.py` 의 일이다 (Phase 5).
 
 `lint-imports` 의 `common-knows-no-domain` 계약이 이걸 기계로 막는다.
 """
@@ -31,7 +31,7 @@ class TokenType(StrEnum):
 class TokenPayload:
     subject: str
     token_type: TokenType
-    #: 토큰 고유 id. 세션 저장소가 개별 무효화의 키로 쓴다 (§2.5, Phase 4).
+    #: 토큰 고유 id. 세션 저장소가 개별 무효화의 키로 쓴다 (§2.5, Phase 5).
     jti: str
     expires_at: datetime
     issued_at: datetime

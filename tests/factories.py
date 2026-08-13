@@ -13,6 +13,10 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.common.security import hash_password
+from app.modules.board.board.model import Board
+from app.modules.board.board.repository import board_repository
+from app.modules.board.post.model import Post
+from app.modules.board.post.repository import post_repository
 from app.modules.user.model import User
 from app.modules.user.repository import user_repository
 
@@ -48,3 +52,38 @@ async def create_user(db: AsyncConnection, **overrides: Any) -> User:
 
 async def create_users(db: AsyncConnection, count_: int, **overrides: Any) -> list[User]:
     return [await create_user(db, **overrides) for _ in range(count_)]
+
+
+# ------------------------------------------------------------------ 게시판 (§4)
+
+
+def board_fields(**overrides: Any) -> dict[str, Any]:
+    """`board_repository.insert` 에 그대로 넘길 수 있는 필드 묶음.
+
+    기본값은 **공개 게시판**이다. `read_role='anonymous'` 라야 주체 없이 읽히고,
+    그게 Phase 4 에서 실제로 검증 가능한 유일한 경로다 (§4.6).
+    """
+    n = next(_sequence)
+    return {
+        'slug': f'board-{n}',
+        'name': f'게시판{n}',
+        'read_role': 'anonymous',
+        'write_role': 'member',
+    } | overrides
+
+
+async def create_board(db: AsyncConnection, **overrides: Any) -> Board:
+    return await board_repository.insert(db, **board_fields(**overrides))
+
+
+def post_fields(**overrides: Any) -> dict[str, Any]:
+    n = next(_sequence)
+    return {'title': f'글 제목 {n}', 'content': f'본문 {n}'} | overrides
+
+
+async def create_post(db: AsyncConnection, *, board_id: int, author_id: int, **overrides: Any) -> Post:
+    return await post_repository.insert(db, board_id=board_id, author_id=author_id, **post_fields(**overrides))
+
+
+async def create_posts(db: AsyncConnection, count_: int, *, board_id: int, author_id: int, **overrides: Any):
+    return [await create_post(db, board_id=board_id, author_id=author_id, **overrides) for _ in range(count_)]

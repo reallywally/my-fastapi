@@ -4,7 +4,7 @@ from fastapi import APIRouter, FastAPI
 
 from app.bootstrap import health
 from app.core.config import get_settings
-from app.modules import user
+from app.modules import board, user
 
 
 def register_routers(app: FastAPI) -> None:
@@ -15,5 +15,5 @@ def register_routers(app: FastAPI) -> None:
 
     api = APIRouter(prefix=settings.api_prefix)
     api.include_router(user.router)
-    # Phase 5 에서 게시판 컨텍스트를 붙인다: api.include_router(board.router)
+    api.include_router(board.router)
     app.include_router(api)

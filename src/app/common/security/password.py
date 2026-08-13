@@ -4,7 +4,7 @@ Argon2id 를 쓴다. bcrypt 는 72바이트에서 입력이 조용히 잘려서 
 사실상 무시된다.
 
 `verify_and_update` 를 같이 노출하는 이유: 파라미터를 올리고 나면 기존 해시를 갱신할
-지점이 필요한데, 로그인 성공 시점이 평문을 가진 유일한 순간이다 (Phase 4 에서 쓴다).
+지점이 필요한데, 로그인 성공 시점이 평문을 가진 유일한 순간이다 (Phase 5 에서 쓴다).
 """
 
 from pwdlib import PasswordHash

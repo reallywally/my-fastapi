@@ -2,7 +2,8 @@
 
 게시판 API 서버. 설계 기준은 [ARCHITECTURE.md](./ARCHITECTURE.md) — 코드보다 그쪽이 먼저다.
 
-현재 상태: **Phase 1~3 완료** (뼈대 + 공용 계층 + `user` 모듈). 다음은 인증/인가 (§6).
+현재 상태: **Phase 1~3 완료 + Phase 4 진행 중** (뼈대 + 공용 계층 + `user` 모듈,
+게시판 컨텍스트의 `board`·`post`). 다음은 `comment` (§4.4, §4.7), 그다음이 인증/인가.
 
 DB는 **SQLite**다 (§1.6). 띄울 서버가 없고 `var/app.db` 파일 하나가 전부다.
 **ORM은 쓰지 않는다** — SQLAlchemy Core만 쓰고, 행은 dataclass로 받는다. Core를 남긴
@@ -11,8 +12,9 @@ DB는 **SQLite**다 (§1.6). 띄울 서버가 없고 `var/app.db` 파일 하나�
 `tests/unit/test_dialect_portability.py`가 매번 검사한다.
 
 `modules/user/` 가 이후 모든 모듈의 템플릿이다 — 새 모듈은 그 5파일 구성을 따른다.
-수정·탈퇴 엔드포인트는 **Phase 4까지 401** 이다 (`modules/user/deps.py`). 가짜 주체를
+**쓰기 엔드포인트는 Phase 5까지 전부 401** 이다 (`modules/user/deps.py`). 가짜 주체를
 넣어두면 인가가 걸린 척하는 엔드포인트가 되기 때문에, 안전한 쪽으로 틀리게 뒀다.
+읽기는 `read_role='anonymous'` 인 게시판에 한해 열려 있다 (§4.6).
 
 ## 시작하기
 

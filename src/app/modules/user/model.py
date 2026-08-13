@@ -23,7 +23,7 @@ from app.common.db import SoftDeletable, UTCDateTime, define_table
 
 class UserStatus(StrEnum):
     active = 'active'
-    #: 관리자가 잠근 상태. Phase 4 에서 잠금 즉시 토큰 무효화를 붙인다 (§6).
+    #: 관리자가 잠근 상태. Phase 5 에서 잠금 즉시 토큰 무효화를 붙인다 (§6).
     locked = 'locked'
 
 

@@ -14,8 +14,14 @@
 from typing import Final
 
 from app.common.db import Record
+from app.modules.board.board import model as board_model
+from app.modules.board.post import model as post_model
 from app.modules.user import model as user_model
 
-MODELS: Final[tuple[type[Record], ...]] = (user_model.User,)
+MODELS: Final[tuple[type[Record], ...]] = (
+    user_model.User,
+    board_model.Board,
+    post_model.Post,
+)
 
-__all__ = ['MODELS', 'user_model']
+__all__ = ['MODELS', 'board_model', 'post_model', 'user_model']
