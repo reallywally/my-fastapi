@@ -2,14 +2,19 @@
 
 테스트마다 사용자 필드를 손으로 채우면, 필드가 하나 추가될 때 모든 테스트를 고쳐야 한다.
 기본값은 여기에만 둔다.
+
+삽입은 레포지토리를 거친다. 별도의 INSERT 를 여기 두면 그게 두 번째 진실이 되고,
+컬럼이 바뀌었을 때 프로덕션 코드가 아니라 테스트만 조용히 통과하는 상황이 생긴다.
 """
 
 from itertools import count
+from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.common.security import hash_password
-from app.modules.user.model import User, UserStatus
+from app.modules.user.model import User
+from app.modules.user.repository import user_repository
 
 _sequence = count(1)
 
@@ -25,28 +30,21 @@ def password_hash() -> str:
     return _default_hash
 
 
-def build_user(**overrides) -> User:
+def user_fields(**overrides: Any) -> dict[str, Any]:
+    """`user_repository.insert` 에 그대로 넘길 수 있는 필드 묶음."""
     n = next(_sequence)
-    fields = {
+    return {
         'username': f'user{n}',
         'email': f'user{n}@example.com',
         'nickname': f'사용자{n}',
         'password_hash': password_hash(),
-        'status': UserStatus.active,
-        'is_superuser': False,
     } | overrides
-    return User(**fields)
 
 
-async def create_user(db: AsyncSession, **overrides) -> User:
-    user = build_user(**overrides)
-    db.add(user)
-    await db.flush()  # commit 하지 않는다 — 테스트 트랜잭션 안에 머문다 (§2.8)
-    return user
+async def create_user(db: AsyncConnection, **overrides: Any) -> User:
+    # commit 하지 않는다 — 테스트 트랜잭션 안에 머문다 (§2.8)
+    return await user_repository.insert(db, **user_fields(**overrides))
 
 
-async def create_users(db: AsyncSession, count_: int, **overrides) -> list[User]:
-    users = [build_user(**overrides) for _ in range(count_)]
-    db.add_all(users)
-    await db.flush()
-    return users
+async def create_users(db: AsyncConnection, count_: int, **overrides: Any) -> list[User]:
+    return [await create_user(db, **overrides) for _ in range(count_)]

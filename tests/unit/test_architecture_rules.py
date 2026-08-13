@@ -148,14 +148,59 @@ def test_rule_26_wire_dtos_stay_inside_their_gateway():
     assert not offenders, f'wire DTO 가 gateway 밖에서 쓰인다: {offenders}'
 
 
-def test_rule_18_sqlite_specifics_do_not_leak_into_modules():
+def test_rule_18_dialect_specifics_do_not_leak_into_modules():
     """규칙 #18 — 방언 전용 처리는 `db/engine.py`·`db/types.py` 안에 가둔다 (§1.6).
 
-    Postgres 로 옮길 때 고쳐야 할 파일이 몇 개인지가 여기서 결정된다.
+    PostgreSQL·MySQL 로 옮길 때 고쳐야 할 파일이 몇 개인지가 여기서 결정된다.
+    새는 통로는 둘뿐이다:
+
+    - `sqlalchemy.dialects.*` import — 대놓고 방언에 묶인 타입·구문
+    - `text()` — 원시 SQL 문자열. Core 표현식과 달리 방언별로 컴파일되지 않는다
+
+    **AST 로 본다.** 문서에서 방언 이름을 언급하는 것은 위반이 아니다 — 오히려
+    왜 그렇게 짰는지 설명하는 자리다.
     """
     module_files = [path for path in SOURCE_FILES if _name(path).startswith('modules/')]
-    offenders = [_name(path) for path in module_files if 'sqlite' in path.read_text(encoding='utf-8').lower()]
-    assert not offenders, f'modules/ 안에 SQLite 전용 코드가 있다: {offenders}'
+
+    def _leaks(tree: ast.Module) -> bool:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith('sqlalchemy.dialects'):
+                return True
+            if isinstance(node, ast.Import) and any(a.name.startswith('sqlalchemy.dialects') for a in node.names):
+                return True
+        return any(name.split('.')[-1] == 'text' for name in _called_names(tree))
+
+    offenders = _offenders(module_files, _leaks)
+    assert not offenders, f'modules/ 안에 방언 전용 코드가 있다: {offenders}'
+
+
+def test_rule_6_soft_delete_condition_is_never_written_by_hand():
+    """규칙 #6 — `deleted == 0` 은 `common/db/sql.py` 의 `alive()` 에만 있다 (§2.4).
+
+    FBA 는 이 조건을 106곳에 손으로 붙였고 14곳을 빠뜨렸다. ORM 전역 필터가 없는
+    지금, 조각이 한 곳에만 있다는 사실이 그 자리를 대신한다.
+
+    비교식(`c.deleted == 0`)을 AST 로 찾는다 — 독스트링에서 규칙을 설명하는 문장을
+    위반으로 잡으면 그건 규칙이 아니라 함정이다.
+    """
+
+    def _compares_deleted(tree: ast.Module) -> bool:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            left = node.left
+            if isinstance(left, ast.Attribute) and left.attr == 'deleted':
+                return True
+            if (
+                isinstance(left, ast.Subscript)
+                and isinstance(left.slice, ast.Constant)
+                and left.slice.value == 'deleted'
+            ):
+                return True
+        return False
+
+    offenders = _offenders(SERVICE_AND_REPOSITORY_FILES, _compares_deleted)
+    assert not offenders, f'soft delete 조건을 손으로 쓴다 — alive() 를 써라: {offenders}'
 
 
 @pytest.mark.skipif(not SERVICE_AND_REPOSITORY_FILES, reason='아직 service/repository 가 없다 (Phase 3~)')

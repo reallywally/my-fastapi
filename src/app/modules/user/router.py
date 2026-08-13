@@ -1,7 +1,7 @@
 """HTTP 만 다룬다 (§1.2). 검증·직렬화·상태코드.
 
 트랜잭션은 **여기서 선언한 의존성으로 결정된다** (§1.1):
-- 읽기 → `SessionDep` (트랜잭션 없음)
+- 읽기 → `ConnDep` (트랜잭션은 열되 끝나면 롤백)
 - 쓰기 → `TxDep` (자동 커밋/롤백)
 
 서비스에는 원시 타입과 스키마만 넘긴다. `Request` 를 그대로 흘리지 않는다 (§2.7).
@@ -9,7 +9,7 @@
 
 from fastapi import APIRouter, status
 
-from app.common.db import SessionDep, TxDep
+from app.common.db import ConnDep, TxDep
 from app.common.pagination import CursorDep, Page
 from app.modules.user.deps import PrincipalDep
 from app.modules.user.schema import CreateUser, UpdateUser, UserOut
@@ -25,12 +25,12 @@ async def create_user(db: TxDep, obj: CreateUser) -> UserOut:
 
 
 @router.get('', summary='목록 (커서 페이지네이션)')
-async def list_users(db: SessionDep, page: CursorDep) -> Page[UserOut]:
+async def list_users(db: ConnDep, page: CursorDep) -> Page[UserOut]:
     return await user_service.list(db=db, cursor=page.cursor, size=page.size)
 
 
 @router.get('/{pk}', summary='상세')
-async def get_user(db: SessionDep, pk: int) -> UserOut:
+async def get_user(db: ConnDep, pk: int) -> UserOut:
     user = await user_service.get(db=db, pk=pk)
     return UserOut.model_validate(user)
 

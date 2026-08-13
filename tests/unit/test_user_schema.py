@@ -51,15 +51,21 @@ def test_user_out_never_exposes_the_password_hash():
     assert 'password' not in UserOut.model_fields
 
 
-def test_user_out_reads_from_the_orm_object():
+def test_user_out_reads_from_the_row_object():
+    """행은 dataclass 다. DB 없이 만들 수 있다는 것이 ORM 을 걷어낸 이득 중 하나다."""
+    now = datetime.now(UTC)
     user = User(
         id=7,
+        created_at=now,
+        updated_at=now,
+        deleted=0,
         username='gildong',
         email='gildong@example.com',
         nickname='홍길동',
         password_hash='$argon2id$secret',
         status=UserStatus.active,
-        created_at=datetime.now(UTC),
+        is_superuser=False,
+        last_login_at=None,
     )
 
     dumped = UserOut.model_validate(user).model_dump()

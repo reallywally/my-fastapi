@@ -5,12 +5,26 @@
 """
 
 from functools import lru_cache
+from typing import Final
 
 from pydantic import RedisDsn, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.constants import Environment, JournalMode
 from app.core.upstream import UpstreamConfig
+
+#: 쓸 수 있는 async 드라이버 (§1.6). 방언 교체는 `DATABASE_URL` 한 줄이지만,
+#: **아무 URL 이나 받아주지는 않는다** — 여기 없는 드라이버는 기동 시점에 거부된다.
+SUPPORTED_DRIVERS: Final = frozenset(
+    {
+        'sqlite+aiosqlite',
+        'postgresql+psycopg',
+        'postgresql+asyncpg',
+        'mysql+asyncmy',
+        'mysql+aiomysql',
+        'mariadb+asyncmy',
+    }
+)
 
 #: 운영에서 이 값이 그대로면 기동을 막는다.
 # HS256 은 32바이트 미만 키에 경고를 낸다(RFC 7518 §3.2). 기본값도 길이는 맞춰둔다.
@@ -36,15 +50,29 @@ class Settings(BaseSettings):
     default_locale: str = 'ko'
 
     # --- database (§2.1: 엔진은 lifespan 이 만든다. 여기는 값만 들고 있다)
-    # SQLite 를 쓴다. 드라이버 접두사가 붙어야 async 로 돈다.
+    # SQLite 를 쓴다 (§1.6). 방언을 바꾸는 것은 **이 한 줄**이다:
+    #   postgresql+psycopg://app:app@localhost:5432/app
+    #   mysql+asyncmy://app:app@localhost:3306/app
+    # 드라이버 접두사가 붙어야 async 로 돈다.
     database_url: str = 'sqlite+aiosqlite:///./var/app.db'
     db_echo: bool = False
+
+    # --- SQLite 전용 (다른 방언에서는 무시된다)
     #: SQLite 는 기본이 OFF 다. 켜지 않으면 FK 가 장식이 된다.
     db_foreign_keys: bool = True
     #: WAL 이라야 읽기가 쓰기를 막지 않는다. 쓰기는 여전히 한 번에 하나다.
     db_journal_mode: JournalMode = JournalMode.wal
     #: 쓰기 잠금 대기 시간(ms). 0 이면 경합 시 즉시 'database is locked'.
     db_busy_timeout_ms: int = 5000
+
+    # --- 서버 DB 전용 (SQLite 에서는 무시된다 — 파일이라 커넥션 풀이 의미가 없다)
+    #: 워커 프로세스마다 이만큼 잡는다. 프로세스 수를 곱한 값이 서버의 최대 연결 수를 넘으면 안 된다.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    #: 죽은 연결을 미리 걸러낸다. 방화벽·프록시가 유휴 연결을 끊는 환경에서 필수다.
+    db_pool_pre_ping: bool = True
+    #: 이 시간이 지난 연결은 버리고 새로 맺는다. MySQL 의 wait_timeout(기본 8시간)보다 짧아야 한다.
+    db_pool_recycle_seconds: int = 3600
 
     # --- redis
     redis_url: RedisDsn = 'redis://localhost:6379/0'  # type: ignore[assignment]
@@ -71,8 +99,13 @@ class Settings(BaseSettings):
         return self.environment is Environment.production
 
     @property
+    def dialect(self) -> str:
+        """`sqlite+aiosqlite://...` → `sqlite`. 방언을 묻는 곳은 전부 이걸 쓴다."""
+        return self.database_url.split('+', 1)[0].split('://', 1)[0]
+
+    @property
     def is_sqlite(self) -> bool:
-        return self.database_url.startswith('sqlite')
+        return self.dialect == 'sqlite'
 
     @property
     def redis_dsn(self) -> str:
@@ -80,10 +113,19 @@ class Settings(BaseSettings):
 
     @field_validator('database_url')
     @classmethod
-    def _require_async_driver(cls, value: str) -> str:
-        """동기 드라이버를 넣으면 기동은 되고 첫 쿼리에서 죽는다. 여기서 막는다."""
-        if '+' not in value.split('://', 1)[0]:
+    def _require_supported_async_driver(cls, value: str) -> str:
+        """동기 드라이버를 넣으면 기동은 되고 첫 쿼리에서 죽는다. 여기서 막는다.
+
+        방언 목록을 여기 두는 이유: 지원한다고 말한 방언과 실제로 테스트한 방언이
+        갈라지는 것을 막기 위해서다. 새 방언을 지원하려면 **여기에 추가하고**
+        `common/db/engine.py` 를 손보고 테스트를 그 방언으로 한 번 돌려야 한다 (§1.6).
+        """
+        scheme = value.split('://', 1)[0]
+        if '+' not in scheme:
             raise ValueError(f'async 드라이버를 명시해라 (예: sqlite+aiosqlite://). 받은 값: {value!r}')
+        if scheme not in SUPPORTED_DRIVERS:
+            supported = ', '.join(sorted(SUPPORTED_DRIVERS))
+            raise ValueError(f'지원하지 않는 드라이버다. 쓸 수 있는 것: {supported}. 받은 값: {value!r}')
         return value
 
     @model_validator(mode='after')

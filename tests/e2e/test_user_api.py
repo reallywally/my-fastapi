@@ -152,7 +152,6 @@ async def test_a_failed_write_leaves_nothing_behind(client, db_connection, db):
 async def test_deleted_users_disappear_from_the_api(client, db):
     user = await create_user(db)
     await user_repository.mark_deleted(db, user.id)
-    db.expunge_all()
 
     assert (await client.get(f'{USERS}/{user.id}')).status_code == 404
 

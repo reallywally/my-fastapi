@@ -15,7 +15,7 @@ from alembic import context
 from sqlalchemy.engine import Connection
 
 from app.bootstrap import models  # noqa: F401 — import 부작용으로 모델을 metadata 에 등록한다
-from app.common.db import Base
+from app.common.db import METADATA
 from app.common.db.engine import create_engine
 from app.common.db.types import UTCDateTime
 from app.core.config import get_settings
@@ -25,7 +25,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = Base.metadata
+target_metadata = METADATA
 
 
 def _database_url() -> str:

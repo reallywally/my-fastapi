@@ -30,30 +30,45 @@ FBA는 "잘 만든 실무형 스캐폴딩"이지만 이름만큼의 아키텍처
 FBA에서 가장 잘 된 부분. **service/repository는 절대 `commit()` 하지 않는다.** 트랜잭션은 엔드포인트가 어떤 의존성을 선언했는지로 결정된다.
 
 ```python
-# common/db/session.py
-async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
-    async with request.app.state.session_factory() as session:
-        yield session
+# common/db/deps.py
+async def get_db(request: Request) -> AsyncGenerator[AsyncConnection, None]:
+    async with source(request)() as conn:            # 읽기: 열고, 끝나면 무조건 롤백
+        transaction = await begin(conn)
+        try:
+            yield conn
+        finally:
+            await transaction.rollback()
 
-async def get_db_tx(request: Request) -> AsyncGenerator[AsyncSession, None]:
-    async with request.app.state.session_factory.begin() as session:
-        yield session
+async def get_db_tx(request: Request) -> AsyncGenerator[AsyncConnection, None]:
+    async with source(request)() as conn:            # 쓰기: 커밋 또는 롤백
+        transaction = await begin(conn)
+        try:
+            yield conn
+        except BaseException:
+            await transaction.rollback()
+            raise
+        else:
+            await transaction.commit()
 
-SessionDep = Annotated[AsyncSession, Depends(get_db)]
-TxDep = Annotated[AsyncSession, Depends(get_db_tx)]
+ConnDep = Annotated[AsyncConnection, Depends(get_db)]
+TxDep = Annotated[AsyncConnection, Depends(get_db_tx)]
 ```
 
 ```python
 @router.get('/{pk}')
-async def get_user(db: SessionDep, pk: int): ...        # 읽기: 트랜잭션 없음
+async def get_user(db: ConnDep, pk: int): ...           # 읽기: 끝나면 롤백
 
 @router.post('')
 async def create_user(db: TxDep, obj: CreateUser): ...  # 쓰기: 자동 커밋/롤백
 ```
 
+**읽기도 트랜잭션 안에서 돈다.** 한 요청이 두 번 조회하는 사이에 남의 커밋이 끼어들면 같은 요청 안에서 앞뒤가 다른 데이터를 본다. 끝에 롤백하는 것은 두 가지를 동시에 준다 — 요청 하나가 일관된 스냅샷을 보고, 읽기 의존성으로 들어온 쓰기는 밖으로 나가지 않는다.
+
+`begin()`은 **이미 트랜잭션이 열려 있으면 SAVEPOINT를 만든다.** 운영에서는 갓 빌린 연결이라 항상 바깥 트랜잭션이고, 테스트에서는 연결이 이미 바깥 트랜잭션 안에 있어서 (§2.8) SAVEPOINT가 된다 — 요청이 커밋해도 테스트가 통째로 롤백할 수 있는 이유다.
+
 **규칙 (린트로 강제):**
-- `service/`, `repository/` 안에서 `commit()` 금지. `flush()`만 허용.
-- 커밋 실패는 예외로 전파되어 DI가 롤백한다.
+- `service/`, `repository/` 안에서 `commit()` 금지.
+- 예외는 그대로 전파되어 DI가 롤백한다.
 
 > FBA는 이 규칙을 21,000줄 전체에서 지켰다 (`commit()` 호출 0회). 그대로 채택.
 
@@ -66,7 +81,7 @@ async def create_user(db: TxDep, obj: CreateUser): ...  # 쓰기: 자동 커밋/
 | 업무 규칙 | `service` | `service.py` | 트랜잭션 내부 로직, 도메인 규칙 |
 | 데이터 접근 | `crud` | `repository.py` | 쿼리만. 규칙 없음 |
 | 외부 서버 | — | `gateway.py` | HTTP 호출 + 응답을 우리 타입으로 변환 (§5.5) |
-| 테이블 | `model` | `model.py` | SQLAlchemy 매핑 |
+| 테이블 | `model` | `model.py` | Core `Table` 정의 + 행 dataclass (§1.6) |
 
 `crud` → `repository`로 개명. `crud`는 CRUD 5개만 있다는 인상을 주는데 실제로는 모든 쿼리가 여기 산다.
 
@@ -77,7 +92,7 @@ async def create_user(db: TxDep, obj: CreateUser): ...  # 쓰기: 자동 커밋/
 ```python
 class UserService:
     @staticmethod
-    async def get(*, db: AsyncSession, pk: int) -> User: ...
+    async def get(*, db: AsyncConnection, pk: int) -> User: ...
 
 user_service = UserService()
 ```
@@ -88,15 +103,15 @@ user_service = UserService()
 - Python은 `unittest.mock.patch`로 모듈 참조를 교체할 수 있다. 전역 싱글턴이 곧 테스트 불가는 아니다.
 - tiangolo의 `full-stack-fastapi-template`도 같은 패턴이다. 생태계 주류를 벗어날 이유가 없다.
 
-**`Depends`는 요청 스코프 / 횡단 관심사에만 쓴다:** 인증, 인가, DB 세션, Redis, 레이트리밋, 페이지네이션, 현재 사용자.
+**`Depends`는 요청 스코프 / 횡단 관심사에만 쓴다:** 인증, 인가, DB 연결, Redis, 레이트리밋, 페이지네이션, 현재 사용자.
 
 ### 1.4 soft delete에 삭제 행 id를 저장
 
 FBA의 영리한 부분. `deleted`가 boolean이 아니라 `0` 또는 **자기 행의 id**다.
 
 ```python
-deleted: Mapped[int] = mapped_column(BigInteger, default=0, server_default='0')
-# __table_args__ = (UniqueConstraint('username', 'deleted'),)
+Column('deleted', BigIntPK, default=0, server_default='0', nullable=False, index=True)
+# UniqueConstraint('username', 'deleted')
 ```
 
 boolean이면 `unique(username)` 때문에 삭제된 아이디를 재사용할 수 없다. id를 넣으면 복합 unique가 성립해서 재등록이 가능하다. **채택.**
@@ -108,29 +123,63 @@ boolean이면 `unique(username)` 때문에 삭제된 아이디를 재사용할 �
 - **OpenTelemetry + Prometheus** — 처음부터 붙인다. 나중에 붙이면 계측 지점을 놓친다
 - **`ensure_unique_route_names` / `simplify_operation_ids`** — OpenAPI 클라이언트 생성 품질을 위해 유지
 
-### 1.6 DB는 SQLite
+### 1.6 DB는 SQLite, ORM 없이 SQLAlchemy Core
 
-**결정: SQLite + aiosqlite.** 서버 프로세스가 없고, 백업이 파일 복사고, 테스트가 Docker 없이 돈다. 게시판 하나 규모에서 Postgres를 세우는 비용이 이득보다 크다.
+**결정 두 개다.**
 
-값은 있지만 **공짜가 아니다.** 아래는 설정하지 않으면 조용히 틀리는 것들이고, 전부 `common/db/engine.py`가 처리한다.
+1. **DB는 SQLite + aiosqlite.** 서버 프로세스가 없고, 백업이 파일 복사고, 테스트가 Docker 없이 돈다. 게시판 하나 규모에서 Postgres를 세우는 비용이 이득보다 크다.
+2. **ORM은 쓰지 않는다. SQLAlchemy Core만 쓴다.** `DeclarativeBase`도 `Session`도 없다. 테이블은 `Table`로 정의하고, 행은 dataclass로 받는다.
+
+두 번째가 왜 Core냐 — raw SQL도 아니고 ORM도 아닌 자리다.
+
+**ORM을 버리는 이유:**
+- 나가는 SQL이 코드에 보인다. N+1과 예상 못 한 조인은 "언제 SQL이 나가는지 안 보이는" 데서 온다
+- identity map · lazy loading · `expire_on_commit` 같은, 알아야 제대로 쓸 수 있는 개념이 사라진다
+- 행 객체가 그냥 dataclass다. DB 없이 만들 수 있고, 고쳐도 DB에 반영되지 않는다 (그래서 수정은 반드시 레포지토리를 거친다)
+
+**그런데 Core는 남기는 이유 — 방언 교체:**
+
+지금은 SQLite지만 PostgreSQL이나 MySQL로 옮길 수 있어야 한다. 그 "옮길 수 있음"을 실제로 만들어주는 것이 Core다. 직접 만든 추상화로는 다음을 전부 소유해야 한다.
+
+| 방언마다 다른 것 | Core가 해주는 것 |
+|---|---|
+| 파라미터 스타일 (`?` / `%(name)s` / `:name`) | 컴파일 시점에 방언별로 렌더링 |
+| 식별자 인용 (`"user"` / `` `user` ``) | `Table`/`Column` 이름을 알아서 인용 |
+| 자동 증가 PK (`INTEGER PK` / `BIGSERIAL` / `AUTO_INCREMENT`) | `BigIntPK` variant + `inserted_primary_key` |
+| `RETURNING` 지원 여부 (MySQL은 **없다**) | `inserted_primary_key`가 lastrowid / RETURNING 중 맞는 것을 고른다 |
+| `LIMIT` / `OFFSET` 문법, boolean 표현, 타입 이름 | 컴파일러가 흡수 |
+| DDL 렌더링 | alembic이 방언별로 생성 |
+
+**이식성이 사는 곳은 두 파일이다:**
+
+- `common/db/types.py` — `BigIntPK`(자동 증가 PK), `UTCDateTime`(tz를 버리는 방언에서 UTC 보존)
+- `common/db/engine.py` — SQLite PRAGMA와 명시적 `BEGIN`, 서버 DB의 커넥션 풀 설정
+
+그 밖에서 방언 이름이 나오면 잘못 짠 것이다 (규칙 #18). 새는 통로는 둘뿐이고, 둘 다 테스트가 막는다: `sqlalchemy.dialects.*` import와 `text()` 원시 SQL.
+
+**SQLite 기본값 중 조용히 틀리는 것들** — 전부 `common/db/engine.py`가 처리한다.
 
 | SQLite 기본값 | 증상 | 대응 |
 |---|---|---|
 | `foreign_keys=OFF` | FK를 선언해도 아무 일도 안 일어난다. 데이터가 깨진 뒤에 안다 | PRAGMA로 ON |
 | `journal_mode=delete` | 읽기가 쓰기에 막힌다 | WAL |
 | `busy_timeout=0` | 동시 쓰기에서 즉시 `database is locked` | 5초 |
-| 드라이버가 트랜잭션을 임의로 연다 | DDL 앞에서 커밋이 새고 SAVEPOINT가 어긋난다 → **테스트 롤백 격리(§2.8)가 깨진다** | `isolation_level=None` + 명시적 `BEGIN` |
-| `BIGINT PRIMARY KEY`는 rowid 별칭이 아니다 | **자동 증가하지 않는다.** id를 손으로 안 넣으면 NULL | `BigInteger().with_variant(Integer, 'sqlite')` |
+| 드라이버가 트랜잭션을 임의로 연다 | DDL 앞에서 커밋이 새고 SAVEPOINT가 어긋난다 → **테스트 롤백 격리(§2.8)와 `TxDep`의 중첩 트랜잭션(§1.1)이 깨진다** | `isolation_level=None` + 명시적 `BEGIN` |
+| `BIGINT PRIMARY KEY`는 rowid 별칭이 아니다 | **자동 증가하지 않는다.** id를 손으로 안 넣으면 NULL | `BigIntPK` (sqlite variant로 INTEGER) |
 | `DateTime(timezone=True)`가 naive를 돌려준다 | aware와 비교하는 순간 `TypeError` | `UTCDateTime` TypeDecorator |
 | `ALTER TABLE`이 거의 없다 | 컬럼 변경·삭제 리비전이 실행 시점에 죽는다 | alembic `render_as_batch=True` |
 
-**포기하는 것:**
-- **§4.8 전문검색을 다시 짜야 한다.** `TSVECTOR` + GIN은 SQLite에 없다. FTS5 가상 테이블로 간다 (§4.8 개정)
+**SQLite라서 지금 포기하는 것:**
+- **§4.8 전문검색은 FTS5로 간다.** `TSVECTOR` + GIN은 없다. 이건 어떤 추상화로도 안 덮이는 자리고, 방언을 옮기면 다시 짜야 한다
 - **쓰기는 한 번에 하나다.** WAL이 읽기를 풀어줄 뿐 쓰기 직렬화는 그대로다 → **§4.5 조회수 버퍼링이 선택이 아니라 필수가 된다**
-- 수평 확장 불가. 필요해지는 시점이 곧 Postgres로 옮기는 시점이다
+- 수평 확장 불가. 필요해지는 시점이 곧 방언을 옮기는 시점이다
 - snowflake PK 옵션은 접는다. 분산 쓰기가 없으면 의미가 없다
 
-**옮길 때를 대비해 지금 지키는 것:** 모델은 방언 중립으로 쓰고, SQLite 전용 처리는 `common/db/engine.py`와 `common/db/types.py` **두 파일에 가둔다.** 서비스·레포지토리에 `sqlite` 라는 단어가 나오면 잘못 짠 것이다.
+**"옮길 수 있다"를 주장이 아니라 사실로 유지하는 방법:**
+
+`tests/unit/test_dialect_portability.py`가 레포지토리의 **모든 문장과 모든 `CREATE TABLE`을 sqlite/postgresql/mysql 세 방언으로 컴파일해본다.** 서버가 필요 없다 — SQLAlchemy는 드라이버 없이도 컴파일할 수 있고, 방언에 없는 구문은 거기서 터진다. 길이 없는 `String` 하나(MySQL은 `VARCHAR`에 길이가 필수다)가 나중에 이식을 막는 것도 여기서 잡힌다.
+
+이게 못 잡는 것은 런타임 의미 차이(잠금, 격리 수준, 정렬·대소문자 비교, 타임존)다. 그건 실제로 그 DB로 한 번 돌려야 안다. **그래서 이 테스트는 하한선이지 보증이 아니다.** 실제로 옮기는 날 CI에 그 방언을 한 줄 추가해서 전체 스위트를 돌리는 것이 마지막 단계다.
 
 ---
 
@@ -162,7 +211,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         pool_size=10, max_overflow=20, pool_pre_ping=True, pool_recycle=3600,
     )
     app.state.engine = engine
-    app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    app.state.db_source = engine.connect   # 의존성이 연결을 빌리는 통로 (§1.1)
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
 
     await app.state.redis.ping()   # 실패하면 예외 → 기동 실패. sys.exit() 쓰지 않는다
@@ -187,12 +236,12 @@ RedisDep = Annotated[Redis, Depends(get_redis)]
 ```python
 class UserService:
     @staticmethod
-    async def update(*, db: AsyncSession, redis: Redis, pk: int, obj: UpdateUser) -> int: ...
+    async def update(*, db: AsyncConnection, redis: Redis, pk: int, obj: UpdateUser) -> int: ...
 ```
 
 얻는 것:
 - `import`만으로는 아무 연결도 열리지 않는다 → 순수 유닛테스트 가능
-- 테스트에서 `app.state`를 fake로 바꾸면 Redis 없이 돌아간다
+- 테스트에서 `app.state.db_source`를 바꿔 끼우면 요청 전체가 한 트랜잭션에 묶인다 (§2.8)
 - 엔진 정리(`dispose`)가 보장된다
 
 ### 2.2 의존성 방향 — 단방향 강제 ★최우선
@@ -276,30 +325,27 @@ layers =
 
 **FBA의 문제:** `deleted=0` 조건을 쿼리마다 손으로 붙인다. **106곳**에 하드코딩되어 있고, **14곳은 빠져 있다.** 하나 놓치면 삭제된 데이터가 노출된다.
 
-**해결: ORM 이벤트로 전역 적용.**
+**해결: 조건을 한 조각으로 만들고, 그 조각만 쓰게 강제한다.**
+
+ORM 전역 필터(`do_orm_execute` + `with_loader_criteria`)를 쓰면 자동으로 붙지만, ORM을 걷어냈으므로 (§1.6) 그 자리를 다른 것으로 메워야 한다. 자동은 아니고 **한 곳**이다.
 
 ```python
-# common/db/soft_delete.py
-from sqlalchemy import event, orm
-from sqlalchemy.orm import Session
+# common/db/sql.py
+def alive(model: type[SoftDeletable]) -> ColumnElement[bool]:
+    return model.TABLE.c.deleted == 0
 
-@event.listens_for(Session, 'do_orm_execute')
-def _apply_soft_delete_filter(state: orm.ORMExecuteState) -> None:
-    if (
-        not state.is_select
-        or state.is_column_load
-        or state.is_relationship_load
-        or state.execution_options.get('include_deleted', False)
-    ):
-        return
-    state.statement = state.statement.options(
-        orm.with_loader_criteria(SoftDeleteMixin, lambda cls: cls.deleted == 0, include_aliases=True)
-    )
+def select_alive(model: type[SoftDeletable]) -> Select:
+    return select(*columns(model)).where(alive(model))       # 레포지토리는 여기서 출발한다
+
+def soft_delete(model: type[SoftDeletable], *conditions) -> Update:
+    # deleted = True 가 아니라 자기 id. 그리고 이미 지워진 행은 건드리지 않는다
+    return update(model.TABLE).where(*conditions, alive(model)).values(deleted=model.TABLE.c.id)
 ```
 
-- `SoftDeleteMixin`을 상속한 모든 모델에 자동 적용된다. 관계 로딩까지 포함.
-- 삭제분까지 봐야 하면 명시적으로 opt-out: `select(User).execution_options(include_deleted=True)`
-- `AsyncSession`도 내부적으로 sync `Session`을 쓰므로 그대로 동작한다.
+- 조건이 바뀌면 고칠 곳이 한 군데다
+- 삭제분까지 봐야 하면 `select_rows()`를 쓴다. 명시적으로 쓴 것만 예외가 된다
+- **레포지토리가 `deleted == 0`을 손으로 쓰지 않는지 AST로 검사한다** (규칙 #6). 비교식을 찾는 것이지 문자열을 찾는 것이 아니다 — 독스트링에서 규칙을 설명하는 문장을 위반으로 잡으면 그건 규칙이 아니라 함정이다
+- `SELECT` 목록은 `columns(model)`이 dataclass 필드에서 뽑는다. 모델과 쿼리가 어긋날 수가 없다
 
 ### 2.5 캐시 무효화를 한 곳으로
 
@@ -380,18 +426,27 @@ tests/
 ```python
 # conftest.py 핵심
 @pytest.fixture(scope='session')
-async def app_with_test_resources(settings):        # settings: 임시 디렉터리의 SQLite 파일
+async def app(settings):                            # settings: 임시 디렉터리의 SQLite 파일
     app = create_app()
     app.state.engine = create_engine(settings)      # 앱과 같은 팩토리 (§1.6의 PRAGMA가 걸린다)
-    app.state.session_factory = async_sessionmaker(app.state.engine, expire_on_commit=False)
+    app.state.db_source = app.state.engine.connect
     app.state.redis = FakeAsyncRedis(decode_responses=True)   # §2.1이 예고한 그대로
     await run_migrations(app.state.engine)          # create_all 아님. alembic으로
     yield app
+
+@pytest.fixture
+async def db_connection(app):                       # 테스트 하나를 감싸는 바깥 트랜잭션
+    async with app.state.engine.connect() as conn:
+        transaction = await conn.begin()
+        try:
+            yield conn                              # client 픽스처가 이 연결을 db_source 에 꽂는다
+        finally:
+            await transaction.rollback()
 ```
 
 **Docker가 필요 없다.** DB는 임시 파일, Redis는 fakeredis. 진짜 Redis로 돌리려면 `TEST_REDIS_URL`을 준다.
 
-- 각 테스트는 **트랜잭션 안에서 돌고 롤백**한다. 테스트 간 격리를 DB truncate로 하지 않는다.
+- 각 테스트는 **트랜잭션 안에서 돌고 롤백**한다. 테스트 간 격리를 DB truncate로 하지 않는다. 요청이 여는 `TxDep` 트랜잭션은 그 안에서 SAVEPOINT가 된다 (§1.1) — 커밋해도 밖으로 안 나간다.
 - `pytest-asyncio` + `httpx.AsyncClient`. FBA처럼 sync `TestClient`를 쓰면 async 경로를 제대로 못 탄다.
 - **CI 커버리지 게이트를 건다.** 숫자는 낮게 시작해도 되지만 *내려가는 것*은 막는다.
 
@@ -515,62 +570,73 @@ layers =
 
 ### 4.2 모델
 
+테이블은 `define_table()`이 만들고(공통 컬럼 자동), 행은 dataclass로 받는다 (§1.6).
+`String`에는 **항상 길이를 준다** — MySQL은 인덱스가 걸리는 문자열에 길이가 필수다.
+
 ```python
 # modules/board/board/model.py
-class Board(Base, DateTimeMixin, SoftDeleteMixin):
-    __tablename__ = 'board'
+board_table = define_table(
+    'board',
+    Column('slug', String(50), nullable=False),            # URL 식별자: 'notice', 'free'
+    Column('name', String(100), nullable=False),
+    Column('description', Text),
+    Column('read_role', String(50), default='anonymous', nullable=False),
+    Column('write_role', String(50), default='member', nullable=False),
+    Column('allow_comment', Boolean, default=True, nullable=False),
+    Column('allow_attachment', Boolean, default=True, nullable=False),
+    Column('display_order', Integer, default=0, nullable=False),
+    UniqueConstraint('slug', 'deleted'),                   # §1.4 — 삭제 후 slug 재사용 가능
+)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    slug: Mapped[str] = mapped_column(String(50))          # URL 식별자: 'notice', 'free'
-    name: Mapped[str] = mapped_column(String(100))
-    description: Mapped[str | None] = mapped_column(Text)
-    read_role: Mapped[str] = mapped_column(String(50), default='anonymous')
-    write_role: Mapped[str] = mapped_column(String(50), default='member')
-    allow_comment: Mapped[bool] = mapped_column(default=True)
-    allow_attachment: Mapped[bool] = mapped_column(default=True)
-    display_order: Mapped[int] = mapped_column(default=0)
+@dataclass(slots=True)
+class Board(SoftDeletable):
+    TABLE: ClassVar[Table] = board_table
 
-    __table_args__ = (UniqueConstraint('slug', 'deleted'),)   # §1.4 — 삭제 후 slug 재사용 가능
+    slug: str
+    name: str
+    description: str | None
+    read_role: str
+    write_role: str
+    allow_comment: bool
+    allow_attachment: bool
+    display_order: int
 ```
 
 ```python
 # modules/board/post/model.py
-class Post(Base, DateTimeMixin, SoftDeleteMixin):
-    __tablename__ = 'post'
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    board_id: Mapped[int] = mapped_column(ForeignKey('board.id'))
-    author_id: Mapped[int] = mapped_column(ForeignKey('user.id'))
-    title: Mapped[str] = mapped_column(String(200))
-    content: Mapped[str] = mapped_column(Text)
-    is_pinned: Mapped[bool] = mapped_column(default=False)     # 상단 고정 (§4.3)
-    status: Mapped[PostStatus] = mapped_column(default=PostStatus.published)
-    view_count: Mapped[int] = mapped_column(default=0)         # Redis에서 주기 반영 (§4.5)
-    comment_count: Mapped[int] = mapped_column(default=0)      # 비정규화 (§4.4)
-
-    __table_args__ = (
-        Index('ix_post_list', 'board_id', 'deleted', 'id'),    # 목록 커서 (§4.3)
-        Index('ix_post_author', 'author_id', 'deleted'),
-        # 전문검색은 별도 FTS5 가상 테이블이다 (§4.8). 여기에 컬럼을 두지 않는다.
-    )
+post_table = define_table(
+    'post',
+    Column('board_id', BigIntPK, ForeignKey('board.id'), nullable=False),
+    Column('author_id', BigIntPK, ForeignKey('user.id'), nullable=False),
+    Column('title', String(200), nullable=False),
+    Column('content', Text, nullable=False),
+    Column('is_pinned', Boolean, default=False, nullable=False),          # 상단 고정 (§4.3)
+    Column('status', Enum(PostStatus, native_enum=False, length=20), default=PostStatus.published),
+    Column('view_count', Integer, default=0, nullable=False),             # Redis에서 주기 반영 (§4.5)
+    Column('comment_count', Integer, default=0, nullable=False),          # 비정규화 (§4.4)
+    Index('ix_post_list', 'board_id', 'deleted', 'id'),                   # 목록 커서 (§4.3)
+    Index('ix_post_author', 'author_id', 'deleted'),
+    # 전문검색은 별도 FTS5 가상 테이블이다 (§4.8). 여기에 컬럼을 두지 않는다.
+)
 ```
 
 ```python
 # modules/board/comment/model.py
-class Comment(Base, DateTimeMixin, SoftDeleteMixin):
-    __tablename__ = 'comment'
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    post_id: Mapped[int] = mapped_column(ForeignKey('post.id'))
-    author_id: Mapped[int] = mapped_column(ForeignKey('user.id'))
-    parent_id: Mapped[int | None] = mapped_column(ForeignKey('comment.id'))
-    path: Mapped[str] = mapped_column(String(64))              # '00000012.00000031'
-    depth: Mapped[int] = mapped_column(default=0)              # 0 또는 1까지만
-    content: Mapped[str] = mapped_column(Text)
-    is_removed: Mapped[bool] = mapped_column(default=False)    # 묘비 (§4.7)
-
-    __table_args__ = (Index('ix_comment_thread', 'post_id', 'path'),)
+comment_table = define_table(
+    'comment',
+    Column('post_id', BigIntPK, ForeignKey('post.id'), nullable=False),
+    Column('author_id', BigIntPK, ForeignKey('user.id'), nullable=False),
+    Column('parent_id', BigIntPK, ForeignKey('comment.id')),
+    Column('path', String(64), nullable=False),                # '00000012.00000031'
+    Column('depth', Integer, default=0, nullable=False),        # 0 또는 1까지만
+    Column('content', Text, nullable=False),
+    Column('is_removed', Boolean, default=False, nullable=False),  # 묘비 (§4.7)
+    Index('ix_comment_thread', 'post_id', 'path'),
+)
 ```
+
+FK 컬럼에 `BigIntPK`를 쓰는 것에 주의한다. PK가 방언마다 다른 타입으로 렌더링되므로
+(§1.6) FK도 같은 타입이어야 한다 — 다르면 제약 생성이 그 방언에서 실패한다.
 
 **`path`를 두는 이유:** 댓글 트리 정렬을 `ORDER BY path` 한 번으로 끝낸다. `parent_id`만 있으면 재귀 CTE를 돌리고 정렬을 앱에서 다시 해야 한다. **깊이는 1단(댓글/대댓글)으로 제한한다** — 무한 뎁스는 화면에서 감당이 안 되고, 서버에서 막지 않으면 데이터가 먼저 망가진다.
 
@@ -615,7 +681,7 @@ async def create_comment(db: TxDep, ...):   # TxDep — 두 쓰기가 하나의 
 ```python
 class CommentService:
     @staticmethod
-    async def create(*, db: AsyncSession, post_id: int, actor_id: int, obj: CreateComment) -> int:
+    async def create(*, db: AsyncConnection, post_id: int, actor_id: int, obj: CreateComment) -> int:
         post = await post_repo.get(db, post_id)
         if post is None:
             raise NotFoundError(code='post.not_found')
@@ -632,7 +698,7 @@ class CommentService:
 
 글을 볼 때마다 `UPDATE post SET view_count = view_count + 1`을 하면:
 - 인기 글 **한 행에 UPDATE가 몰려** 경합이 난다. **SQLite는 쓰기가 DB 전체에 하나뿐이라(§1.6) 이게 서버 전체를 막는다** — 선택이 아니라 필수인 이유
-- **읽기 요청이 쓰기 트랜잭션이 된다.** §1.1에서 `SessionDep`/`TxDep`을 나눈 의미가 사라진다
+- **읽기 요청이 쓰기 트랜잭션이 된다.** §1.1에서 `ConnDep`/`TxDep`을 나눈 의미가 사라진다
 
 **Redis에 누적하고 주기적으로 반영한다.**
 
@@ -645,13 +711,13 @@ class PostViewCounter:
             return
         await redis.hincrby('post:views:pending', str(post_id), 1)
 
-    async def flush(self, db: AsyncSession, redis: Redis) -> int:
+    async def flush(self, db: AsyncConnection, redis: Redis) -> int:
         """pending 해시를 원자적으로 비우고 DB에 일괄 반영한다."""
 
 post_views = PostViewCounter()
 ```
 
-- 상세 조회 엔드포인트는 **`SessionDep`(트랜잭션 없음)을 유지**한다
+- 상세 조회 엔드포인트는 **`ConnDep`(끝나면 롤백)을 유지**한다
 - `flush`는 백그라운드 소비자가 주기 실행한다. 미들웨어에 넣지 않는다 — §2.2의 "미들웨어는 큐에 넣기만" 과 같은 결
 - **Redis가 죽어도 조회는 성공해야 한다.** 카운팅 실패는 삼키고 로그만 남긴다. 조회수는 요청을 실패시킬 만한 값이 아니다
 - 응답에는 DB의 `view_count`만 쓴다. pending을 합산해 정확하게 보이려는 유혹을 참는다
@@ -663,7 +729,7 @@ post_views = PostViewCounter()
 ```python
 # modules/board/board/deps.py
 def require_board(perm: Literal['read', 'write']):
-    async def _dep(db: SessionDep, actor: CurrentUserDep, slug: str) -> Board:
+    async def _dep(db: ConnDep, actor: CurrentUserDep, slug: str) -> Board:
         board = await board_repo.get_by_slug(db, slug)
         if board is None:
             raise NotFoundError(code='board.not_found')
@@ -682,7 +748,7 @@ BoardWriteDep = Annotated[Board, Depends(require_board('write'))]
 ```python
 class PostService:
     @staticmethod
-    async def update(*, db: AsyncSession, post_id: int, actor_id: int,
+    async def update(*, db: AsyncConnection, post_id: int, actor_id: int,
                      is_admin: bool, obj: UpdatePost) -> None:
         post = await post_repo.get(db, post_id)
         if post is None:
@@ -703,10 +769,10 @@ soft delete(§1.4, §2.4)라 행은 남는다. 문제는 트리가 끊기는 경
 | 상황 | 처리 |
 |---|---|
 | 글 삭제 | `post.deleted = post.id`. 댓글은 손대지 않는다 — 글이 안 보이면 댓글로 가는 경로가 없다 |
-| 자식 없는 댓글 삭제 | `comment.deleted = comment.id`. 전역 필터가 감춘다 |
+| 자식 없는 댓글 삭제 | `comment.deleted = comment.id`. `alive()`가 감춘다 |
 | **자식 있는 댓글 삭제** | 감추면 대댓글이 고아가 된다. `is_removed = True` + 본문 마스킹. **soft delete 아님** |
 
-세 번째가 핵심이다. `deleted`(감사·복구용)와 `is_removed`(트리 유지용 묘비)는 **다른 개념이고 합치면 안 된다.** 하나로 합치는 순간 §2.4의 전역 필터가 자식까지 숨겨버린다.
+세 번째가 핵심이다. `deleted`(감사·복구용)와 `is_removed`(트리 유지용 묘비)는 **다른 개념이고 합치면 안 된다.** 하나로 합치는 순간 §2.4의 `alive()`가 자식까지 숨겨버린다.
 
 응답에서 `is_removed` 댓글은 `content`를 비우고 작성자를 익명화한다. 마스킹은 **schema 계층**에서 한다 — 서비스가 응답 형태를 신경 쓰기 시작하면 §2.7 누수와 같은 문제다.
 
@@ -735,7 +801,7 @@ END;
 
 - 가상 테이블과 트리거는 alembic이 autogenerate하지 못한다. **리비전을 손으로 쓴다** — 그래서 §2.3의 "마이그레이션이 유일한 소스" 가 여기서 더 중요해진다
 - 토크나이저는 `unicode61`로 시작한다. **한국어 형태소 분석은 안 된다** — 어절 단위 매칭이다. 실제로 부족해지면 그때 검색엔진을 붙인다 (§3.1과 같은 원칙: 필요해진 뒤에, 정적으로)
-- **soft delete와 FTS는 자동으로 연결되지 않는다.** 전역 필터(§2.4)는 ORM 이벤트라 가상 테이블에 안 붙는다. FTS 결과를 `post`와 조인해서 걸러야 한다
+- **soft delete와 FTS는 자동으로 연결되지 않는다.** `alive()`(§2.4)는 우리 테이블의 조건이라 가상 테이블에 붙지 않는다. FTS 결과를 `post`와 조인해서 걸러야 한다
 - 검색도 §4.3의 커서 페이지네이션을 쓴다. `rank` 정렬이 필요해지면 커서 키가 `(rank, id)` 복합이 된다
 
 ### 4.9 첨부파일
@@ -855,7 +921,7 @@ except UpstreamStatusError as exc:
 
 | | 무엇 | 소유자 | 바뀌면 |
 |---|---|---|---|
-| `model.py` | SQLAlchemy 행 | **우리** | 마이그레이션을 쓴다 (§2.3) |
+| `model.py` | 우리 테이블의 행 | **우리** | 마이그레이션을 쓴다 (§2.3) |
 | `schema.py` | **우리** API 계약 | **우리** | 화면이 깨진다 (§0) |
 | `gateway.py`의 wire DTO | **남의** API 응답 | **상대** | 예고 없이 바뀐다 |
 
@@ -898,7 +964,7 @@ class WeatherGateway(Gateway):
 ```python
 class PostService:
     @staticmethod
-    async def create(*, db: AsyncSession, upstreams: UpstreamRegistry, ...) -> int:
+    async def create(*, db: AsyncConnection, upstreams: UpstreamRegistry, ...) -> int:
         weather = await WeatherGateway.fetch(upstreams=upstreams, city=city)
 ```
 
@@ -948,7 +1014,7 @@ my-fastapi/
    │  ├─ constants.py
    │  └─ paths.py
    ├─ common/                   # core만 import
-   │  ├─ db/                    #   session, base model, mixin, soft_delete
+   │  ├─ db/                    #   engine, deps, Table 도구, 행 dataclass, 쿼리 조각
    │  ├─ cache/                 #   redis 헬퍼
    │  ├─ security/              #   token encode/decode, hashing, Principal — 도메인 무지
    │  ├─ http/                  #   업스트림 전송 계층 (§5). 상대가 무슨 서버인지 모른다
@@ -990,7 +1056,7 @@ my-fastapi/
 ### Phase 1 — 뼈대 (여기서 타협하면 나중에 못 고친다) ✅
 - [x] `core/config.py` — pydantic-settings, `.env.example` 동기화(테스트로 강제)
 - [x] `bootstrap/lifespan.py` — 엔진·Redis를 여기서만 생성. **전역 인스턴스 0개**
-- [x] `common/db/session.py` — `SessionDep` / `TxDep`
+- [x] `common/db/deps.py` — `ConnDep` / `TxDep`
 - [x] alembic 초기화 + **첫 리비전 커밋**(`0001_baseline`, 빈 스키마). `create_all` 없음
 - [x] `.importlinter` + CI 연결 — 계약 3개(layers, core 독립, common 무지)
 - [x] `bootstrap/middleware.py` — CORS(허용 오리진은 설정값), 요청 ID (§0)
@@ -998,24 +1064,31 @@ my-fastapi/
 - [x] ruff + pre-commit + CI (lint / test / migrations 3잡)
 
 Phase 1에서 추가로 확정한 것:
-- `common/db/base.py` — `Base` + **제약 이름 규칙**. 첫 리비전 전에 정해야 하는 값이다
+- `common/db/base.py` — `METADATA` + **제약 이름 규칙**. 첫 리비전 전에 정해야 하는 값이다
 - `common/openapi.py` — operation id 고정 + 중복 시 **기동 실패** (§0의 계약)
 - `bootstrap/health.py` — liveness/readiness 분리. liveness가 DB를 보면 순단에 프로세스가 죽는다
 - `tests/unit/test_architecture_rules.py` — §8 규칙표의 "코드리뷰/grep" 항목을 **AST 검사**로 승격
   (규칙 #1·#3·#4·#5·#10, `sys.exit` 금지). 지금은 공허하게 통과하고, Phase 3부터 일한다
 
 ### Phase 2 — 공용 계층 ✅
-- [x] `common/db/` base model, `DateTimeMixin`, `SoftDeleteMixin`(deleted=id 방식)
-- [x] `common/db/soft_delete.py` — `do_orm_execute` 전역 필터 + `soft_delete()` 헬퍼
+- [x] `common/db/schema.py` — 공통 컬럼 팩토리 + `define_table()` (deleted=id 방식)
+- [x] `common/db/sql.py` — `alive()` / `select_alive()` / `soft_delete()` / `columns()` 조각
 - [x] `common/errors/` — 에러 **코드** 체계, 예외 핸들러, i18n 카탈로그(`locale/{ko,en}.json`)
 - [x] `common/response.py` — msgspec 응답, 에러 응답 계약
 - [x] `common/security/` — 토큰 encode/decode + argon2 해싱. 도메인 import 0
 
 DB를 SQLite로 바꾸면서 같이 들어간 것 (§1.6):
 - [x] `common/db/engine.py` — PRAGMA(FK/WAL/busy_timeout) + 명시적 `BEGIN`. **엔진을 만드는 유일한 함수**
-- [x] `common/db/types.py` — `BigIntPK`(SQLite 자동증가), `UTCDateTime`(tz 보존)
+- [x] `common/db/types.py` — `BigIntPK`(방언별 자동증가), `UTCDateTime`(tz 보존)
 - [x] alembic `render_as_batch`, `migrations/env.py`도 같은 엔진 팩토리 사용
 - [x] 테스트에서 testcontainers 제거 → 임시 SQLite 파일 + `fakeredis`. **Docker 불필요**
+
+ORM을 걷어내고 Core로 내려오면서 같이 들어간 것 (§1.6):
+- [x] `common/db/model.py` — `Record` / `SoftDeletable` 행 dataclass 조상
+- [x] `common/db/sql.py` — `columns()`가 dataclass 필드에서 SELECT 목록을 뽑는다
+- [x] 엔진 팩토리의 방언 분기 — SQLite는 PRAGMA, 서버 DB는 커넥션 풀
+- [x] `SUPPORTED_DRIVERS` — 지원한다고 말한 방언과 검증한 방언이 갈라지지 않게
+- [x] `tests/unit/test_dialect_portability.py` — 모든 문장을 3개 방언으로 컴파일
 
 Phase 2에서 추가로 확정한 것:
 - `common/pagination.py` — §4.3의 `Page{items, next_cursor, has_next}`. Phase 5에서 쓰지만
@@ -1030,11 +1103,11 @@ Phase 2에서 추가로 확정한 것:
 ```
 modules/<name>/
 ├─ __init__.py      # router 만 노출. bootstrap 이 보는 유일한 이름
-├─ router.py        # HTTP. 읽기는 SessionDep, 쓰기는 TxDep (§1.1)
+├─ router.py        # HTTP. 읽기는 ConnDep, 쓰기는 TxDep (§1.1)
 ├─ schema.py        # 요청/응답. UserOut 처럼 응답은 허용 목록으로 (해시 노출 방지)
 ├─ service.py       # 규칙. commit 금지, Request 금지, 에러는 코드로
-├─ repository.py    # 쿼리만. deleted==0 도, commit 도 쓰지 않는다
-├─ model.py         # 테이블. Base + PrimaryKeyMixin + DateTimeMixin + SoftDeleteMixin
+├─ repository.py    # 쿼리만. select_alive() 를 쓰고, commit 은 하지 않는다
+├─ model.py         # define_table() + 행 dataclass (Record / SoftDeletable)
 └─ deps.py          # 필요할 때만. 요청 스코프 횡단 관심사
 ```
 
@@ -1068,7 +1141,7 @@ Phase 3에서 추가로 확정한 것:
   - [ ] `comment_count` 갱신이 같은 트랜잭션인지 (§4.4) — 롤백 시 카운트도 롤백
   - [ ] 자식 있는 댓글 삭제 → `is_removed` 묘비, 자식은 계속 보임 (§4.7)
 - [ ] `board/post/view_counter.py` — Redis 버퍼 + flush 소비자 (§4.5)
-  - [ ] 상세 조회가 여전히 `SessionDep`인지 (쓰기 트랜잭션이 아님)
+  - [ ] 상세 조회가 여전히 `ConnDep`인지 (쓰기 트랜잭션이 아님)
   - [ ] **Redis 다운 시에도 조회 200** — fake redis로 예외 주입
 - [ ] `board/attachment/` — 라우터가 `UploadFile` 처리, 서비스는 원시 타입만 (§4.9)
 - [ ] FTS 검색 + GIN 인덱스 (§4.8)
@@ -1091,7 +1164,7 @@ Phase 3에서 추가로 확정한 것:
 | 3 | 모듈 최상위에서 I/O 자원 생성 금지 | 리뷰 + import 테스트 |
 | 4 | 앱 코드에서 `create_all()` 금지 | `alembic check` (CI) |
 | 5 | 서비스 시그니처에 `Request`/`Response` 금지 | 코드리뷰 |
-| 6 | 소프트 삭제 필터는 손으로 쓰지 않는다 | ORM 이벤트가 전역 처리 |
+| 6 | 소프트 삭제 조건은 `alive()` 하나뿐 | 유닛 테스트가 AST로 검사 |
 | 7 | 에러는 메시지가 아니라 코드로 raise | 예외 타입이 `code` 요구 |
 | 8 | 새 모듈은 테스트와 같은 PR에 | 커버리지 게이트 |
 | 9 | 함수 내부 `import`는 순환참조 신호 — 금지 | `lint-imports`가 근본 차단 |
@@ -1103,11 +1176,14 @@ Phase 3에서 추가로 확정한 것:
 | 15 | `board` 컨텍스트 내부 방향: comment/attachment → post → board | `lint-imports` (CI) |
 | 16 | 화면용 코드 없음 — 템플릿·정적파일·세션쿠키 금지 | 리뷰 (§0) |
 | 17 | 엔진 생성은 `common/db/engine.py` 하나뿐 | 유닛 테스트가 AST로 검사 |
-| 18 | SQLite 전용 코드는 `db/engine.py`·`db/types.py` 밖으로 안 나간다 | 리뷰 (§1.6) |
+| 18 | 방언 전용 코드는 `db/engine.py`·`db/types.py` 밖으로 안 나간다 | 유닛 테스트가 AST로 검사 |
 | 19 | 시각은 aware UTC. naive 저장은 거부된다 | `UTCDateTime` 이 예외 |
 | 20 | 5xx 응답 본문에 내부 정보 금지 | e2e 테스트 (§2.6) |
 | 21 | 새 모델은 `bootstrap/models.py` 에 등록한다 | `test_model_registry.py` |
 | 22 | soft delete 테이블의 unique 는 `deleted` 를 포함한다 | `test_model_registry.py` |
+| 29 | 모든 쿼리가 지원 방언 전부에서 컴파일된다 | `test_dialect_portability.py` |
+| 30 | 모델 dataclass 필드와 테이블 컬럼이 일치한다 | `test_model_registry.py` |
+| 31 | `String` 에는 항상 길이를 준다 (MySQL 필수) | DDL 컴파일 테스트 |
 | 23 | `raise ...(code=)` 의 코드는 카탈로그에 있어야 한다 | `test_errors.py` (AST) |
 | 24 | 응답 스키마는 허용 목록. 모델을 그대로 직렬화하지 않는다 | 리뷰 + e2e(해시 미노출) |
 | 25 | `httpx.AsyncClient` 생성은 `common/http/registry.py` 하나뿐 | 유닛 테스트가 AST로 검사 |

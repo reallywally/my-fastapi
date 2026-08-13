@@ -5,6 +5,10 @@
 현재 상태: **Phase 1~3 완료** (뼈대 + 공용 계층 + `user` 모듈). 다음은 인증/인가 (§6).
 
 DB는 **SQLite**다 (§1.6). 띄울 서버가 없고 `var/app.db` 파일 하나가 전부다.
+**ORM은 쓰지 않는다** — SQLAlchemy Core만 쓰고, 행은 dataclass로 받는다. Core를 남긴
+이유는 하나다: 나중에 PostgreSQL·MySQL로 옮길 때 방언 차이를 대신 흡수해줄 계층이
+필요해서다. 방언 교체는 `DATABASE_URL` 한 줄이고, 그게 사실인지는
+`tests/unit/test_dialect_portability.py`가 매번 검사한다.
 
 `modules/user/` 가 이후 모든 모듈의 템플릿이다 — 새 모듈은 그 5파일 구성을 따른다.
 수정·탈퇴 엔드포인트는 **Phase 4까지 401** 이다 (`modules/user/deps.py`). 가짜 주체를
@@ -50,6 +54,26 @@ uv run alembic check            # 모델과 마이그레이션이 어긋나면 �
 > 새 모델은 `src/app/bootstrap/models.py` 에 import 를 추가해야 한다. 빼먹으면
 > autogenerate 가 에러 없이 **빈 리비전**을 만들고 `alembic check` 도 통과한다.
 > `tests/unit/test_model_registry.py` 가 잡는다.
+
+## DB 방언 바꾸기 (§1.6)
+
+`DATABASE_URL` 한 줄이다. 지원 목록은 `core/config.py` 의 `SUPPORTED_DRIVERS` 에 있고,
+목록에 없는 URL 은 기동 시점에 거부된다.
+
+```bash
+DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/app
+DATABASE_URL=mysql+asyncmy://app:app@localhost:3306/app
+```
+
+바꾸기 전에 알아야 할 것:
+
+1. **드라이버를 설치해야 한다** (`uv add psycopg` 또는 `uv add asyncmy`).
+2. **마이그레이션을 그 DB 에 처음부터 다시 올린다.** 리비전은 방언 중립으로 쓰여 있어
+   그대로 돌지만, SQLite 파일의 데이터는 따라가지 않는다.
+3. **테스트를 그 방언으로 한 번 돌린다.** `tests/unit/test_dialect_portability.py` 는
+   컴파일만 검사한다 — 잠금·격리 수준·정렬 같은 런타임 차이는 실제로 돌려야 안다.
+4. **§4.8 전문검색은 다시 짜야 한다.** SQLite FTS5 / PostgreSQL `TSVECTOR` /
+   MySQL FULLTEXT 는 어떤 추상화로도 안 덮인다.
 
 ## 외부 서버 호출 (§5)
 
@@ -97,11 +121,11 @@ class WeatherGateway(Gateway):
 ```
 modules/<name>/
 ├─ __init__.py   router 만 노출
-├─ router.py     HTTP 만. 읽기 SessionDep / 쓰기 TxDep
+├─ router.py     HTTP 만. 읽기 ConnDep / 쓰기 TxDep
 ├─ schema.py     요청·응답. 응답은 허용 목록으로 (모델 직렬화 금지)
 ├─ service.py    규칙. commit·Request 금지, 에러는 코드로
 ├─ repository.py 쿼리만
-└─ model.py      테이블
+└─ model.py      Table 정의 + 행 dataclass
 ```
 
 그리고 세 곳에 등록한다: `bootstrap/router.py`, `bootstrap/models.py`,
@@ -126,10 +150,12 @@ src/app/
   열리지 않는다 (§2.1). `tests/unit/test_import_purity.py` 가 이걸 지킨다.
 - **엔진은 `common/db/engine.py` 로만 만든다.** SQLite 는 PRAGMA 를 안 걸면 외래키가
   꺼진 채로 돈다 (§1.6). `create_async_engine` 을 직접 부르면 테스트가 막는다.
-- **트랜잭션은 엔드포인트가 결정한다.** 읽기는 `SessionDep`, 쓰기는 `TxDep` (§1.1).
+- **트랜잭션은 엔드포인트가 결정한다.** 읽기는 `ConnDep`, 쓰기는 `TxDep` (§1.1).
   service/repository 는 `commit()` 하지 않는다.
-- **soft delete 조건을 손으로 쓰지 않는다.** 전역 ORM 필터가 붙인다 (§2.4).
-  삭제분을 보려면 `.execution_options(include_deleted=True)`.
+- **soft delete 조건을 손으로 쓰지 않는다.** `select_alive()` 가 붙인다 (§2.4).
+  삭제분까지 보려면 `select_rows()` 를 쓴다 — 조건이 한 곳에만 있다는 것이 요점이다.
+- **방언 전용 코드는 `common/db/engine.py`·`types.py` 안에만 있다** (§1.6).
+  `modules/` 에서 `text()` 나 `sqlalchemy.dialects` 를 쓰면 테스트가 막는다.
 - **에러는 메시지가 아니라 코드로 raise 한다.** `raise NotFoundError(code='post.not_found')`.
   문구는 `src/app/locale/{ko,en}.json` 이 갖는다 (§2.6).
 - **시각은 항상 aware UTC.** naive 를 저장하려 하면 `UTCDateTime` 이 거부한다.

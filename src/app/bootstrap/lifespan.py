@@ -14,7 +14,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from redis.asyncio import Redis
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.common.db.engine import create_engine
 from app.common.http.registry import create_registry
@@ -32,7 +31,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     upstreams, http_clients = create_registry(settings.upstreams)
 
     app.state.engine = engine
-    app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    # 의존성이 연결을 빌리는 통로 (§1.1). 테스트는 이 한 줄만 갈아끼우면 된다 (§2.8).
+    app.state.db_source = engine.connect
     app.state.redis = redis
     app.state.upstreams = upstreams
 

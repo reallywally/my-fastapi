@@ -11,6 +11,7 @@ Docker 가 필요 없다. 유닛·통합·E2E 전부 아무 데서나 돈다.
 
 import os
 from collections.abc import AsyncGenerator, Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -21,7 +22,7 @@ from alembic.config import Config
 from fakeredis import FakeAsyncRedis
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.bootstrap.app import create_app
 from app.common.db.engine import create_engine
@@ -91,7 +92,7 @@ async def app(settings: Settings, redis_client) -> AsyncGenerator:
     application = create_app()
     engine = create_engine(settings)
     application.state.engine = engine
-    application.state.session_factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    application.state.db_source = engine.connect
     application.state.redis = redis_client
 
     await run_migrations(engine)
@@ -115,36 +116,28 @@ async def db_connection(app) -> AsyncGenerator[AsyncConnection, None]:
 
 
 @pytest_asyncio.fixture(loop_scope='session')
-async def db(db_connection: AsyncConnection) -> AsyncGenerator[AsyncSession, None]:
-    """repository 통합 테스트용 세션.
+async def db(db_connection: AsyncConnection) -> AsyncConnection:
+    """repository/service 통합 테스트용 연결. `db_connection` 과 같은 것이다.
 
-    `join_transaction_mode='create_savepoint'` 덕분에 세션이 `commit()` 해도
-    바깥 트랜잭션은 살아 있고, 테스트 종료 시 통째로 롤백된다.
+    요청이 여는 트랜잭션(`TxDep`)은 이 바깥 트랜잭션 안에서 SAVEPOINT 가 된다
+    (`common/db/deps.py` 의 `begin`) — 커밋해도 밖으로 나가지 않는다.
     """
-    session = AsyncSession(
-        bind=db_connection,
-        expire_on_commit=False,
-        autoflush=False,
-        join_transaction_mode='create_savepoint',
-    )
-    try:
-        yield session
-    finally:
-        await session.close()
+    return db_connection
 
 
 @pytest_asyncio.fixture(loop_scope='session')
 async def client(app, db_connection: AsyncConnection) -> AsyncGenerator[AsyncClient, None]:
-    """E2E 클라이언트. 라우터가 쓰는 세션 팩토리를 테스트 트랜잭션에 묶는다."""
-    original = app.state.session_factory
-    app.state.session_factory = async_sessionmaker(
-        bind=db_connection,
-        expire_on_commit=False,
-        autoflush=False,
-        join_transaction_mode='create_savepoint',
-    )
+    """E2E 클라이언트. 라우터가 빌리는 연결을 테스트 트랜잭션에 묶는다."""
+
+    @asynccontextmanager
+    async def _pinned() -> AsyncGenerator[AsyncConnection, None]:
+        # 엔진에서 새로 빌리지 않고 테스트의 연결을 그대로 준다. 닫지도 않는다.
+        yield db_connection
+
+    original = app.state.db_source
+    app.state.db_source = _pinned
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as http_client:
             yield http_client
     finally:
-        app.state.session_factory = original
+        app.state.db_source = original

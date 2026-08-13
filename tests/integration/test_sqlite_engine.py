@@ -2,6 +2,8 @@
 
 전부 "설정 안 하면 조용히 틀리는" 것들이다. 특히 외래키 — 꺼져 있으면 FK 를 선언해도
 아무 일도 일어나지 않고, 그걸 알아채는 시점은 보통 데이터가 이미 깨진 뒤다.
+
+방언 분기 자체(풀 옵션, 드라이버 검증)는 `tests/unit/test_engine_options.py` 가 본다.
 """
 
 import pytest
@@ -9,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.common.db.engine import _sqlite_file_path, create_engine
+from app.common.db.engine import create_engine
 from app.core.config import Settings
 
 
@@ -66,11 +68,6 @@ async def test_previous_tests_ddl_did_not_survive(db_connection):
     found = await db_connection.execute(text("SELECT count(*) FROM sqlite_master WHERE name = 'rollback_probe'"))
 
     assert found.scalar() == 0
-
-
-def test_memory_urls_have_no_file_path():
-    assert _sqlite_file_path('sqlite+aiosqlite:///:memory:') is None
-    assert _sqlite_file_path('sqlite+aiosqlite://') is None
 
 
 @pytest.mark.asyncio(loop_scope='session')

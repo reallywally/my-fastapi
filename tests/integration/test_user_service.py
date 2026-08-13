@@ -5,17 +5,17 @@ repository 는 쿼리만, service 는 규칙만 — 이 테스트가 그 경계�
 """
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection
 
+from app.common.db import one_or_none, select_rows
 from app.common.errors import ConflictError, ForbiddenError, NotFoundError
 from app.common.security import Principal, verify_password
-from app.modules.user.model import User
+from app.modules.user.model import User, user_table
 from app.modules.user.repository import user_repository
 from app.modules.user.schema import CreateUser, UpdateUser
 from app.modules.user.service import user_service
-from tests.factories import DEFAULT_PASSWORD, build_user, create_user, create_users
+from tests.factories import DEFAULT_PASSWORD, create_user, create_users, user_fields
 
 pytestmark = pytest.mark.asyncio(loop_scope='session')
 
@@ -32,10 +32,16 @@ def _new(**overrides) -> CreateUser:
     )
 
 
+async def _row_including_deleted(db: AsyncConnection, pk: int) -> User | None:
+    """삭제분까지 본다. 조회는 기본적으로 `alive()` 를 깔고 있다 (§2.4)."""
+    result = await db.execute(select_rows(User).where(user_table.c.id == pk))
+    return one_or_none(User, result)
+
+
 # --------------------------------------------------------------------- 가입
 
 
-async def test_create_stores_a_hash_not_the_plaintext(db: AsyncSession):
+async def test_create_stores_a_hash_not_the_plaintext(db: AsyncConnection):
     user = await user_service.create(db=db, obj=_new())
 
     assert user.id is not None
@@ -43,7 +49,7 @@ async def test_create_stores_a_hash_not_the_plaintext(db: AsyncSession):
     assert verify_password(DEFAULT_PASSWORD, user.password_hash)
 
 
-async def test_create_rejects_a_duplicate_username(db: AsyncSession):
+async def test_create_rejects_a_duplicate_username(db: AsyncConnection):
     await create_user(db, username='gildong')
 
     with pytest.raises(ConflictError) as caught:
@@ -52,7 +58,7 @@ async def test_create_rejects_a_duplicate_username(db: AsyncSession):
     assert caught.value.code == 'user.username_taken'
 
 
-async def test_create_rejects_a_duplicate_email(db: AsyncSession):
+async def test_create_rejects_a_duplicate_email(db: AsyncConnection):
     await create_user(db, email='taken@example.com')
 
     with pytest.raises(ConflictError) as caught:
@@ -61,40 +67,38 @@ async def test_create_rejects_a_duplicate_email(db: AsyncSession):
     assert caught.value.code == 'user.email_taken'
 
 
-async def test_the_unique_constraint_is_the_real_guard(db: AsyncSession):
+async def test_the_unique_constraint_is_the_real_guard(db: AsyncConnection):
     """사전 확인을 우회해도 DB 가 막아야 한다 — 확인과 삽입 사이에는 경합이 있다."""
     await create_user(db, username='gildong')
 
     # 서비스의 사전 확인을 건너뛰고 레포지토리로 직접 넣는다.
     with pytest.raises(IntegrityError):
-        await user_repository.insert(db, build_user(username='gildong'))
+        await user_repository.insert(db, **user_fields(username='gildong'))
 
 
 # ------------------------------------------------------------------- 조회
 
 
-async def test_get_raises_not_found_for_a_missing_id(db: AsyncSession):
+async def test_get_raises_not_found_for_a_missing_id(db: AsyncConnection):
     with pytest.raises(NotFoundError) as caught:
         await user_service.get(db=db, pk=999_999)
 
     assert caught.value.code == 'user.not_found'
 
 
-async def test_get_raises_not_found_for_a_deleted_user(db: AsyncSession):
+async def test_get_raises_not_found_for_a_deleted_user(db: AsyncConnection):
     """§2.4 — 서비스는 `deleted == 0` 을 쓰지 않는다. 전역 필터가 처리한다."""
     user = await create_user(db)
-    user_id = user.id
-    await user_repository.mark_deleted(db, user_id)
-    db.expunge_all()
+    await user_repository.mark_deleted(db, user.id)
 
     with pytest.raises(NotFoundError):
-        await user_service.get(db=db, pk=user_id)
+        await user_service.get(db=db, pk=user.id)
 
 
 # --------------------------------------------------------- 목록 (§4.3)
 
 
-async def test_list_returns_newest_first_without_a_total(db: AsyncSession):
+async def test_list_returns_newest_first_without_a_total(db: AsyncConnection):
     await create_users(db, 3)
 
     page = await user_service.list(db=db, cursor=None, size=10)
@@ -104,7 +108,7 @@ async def test_list_returns_newest_first_without_a_total(db: AsyncSession):
     assert page.next_cursor is None
 
 
-async def test_list_pages_with_a_cursor(db: AsyncSession):
+async def test_list_pages_with_a_cursor(db: AsyncConnection):
     created = await create_users(db, 5)
     newest_first = sorted((user.id for user in created), reverse=True)
 
@@ -117,7 +121,7 @@ async def test_list_pages_with_a_cursor(db: AsyncSession):
     assert [item.id for item in second.items] == newest_first[2:4]
 
 
-async def test_a_row_inserted_mid_paging_does_not_duplicate_or_skip(db: AsyncSession):
+async def test_a_row_inserted_mid_paging_does_not_duplicate_or_skip(db: AsyncConnection):
     """OFFSET 을 쓰지 않는 이유 (§4.3). 커서는 id 라서 새 행이 앞에 끼어도 흔들리지 않는다."""
     created = await create_users(db, 4)
     newest_first = sorted((user.id for user in created), reverse=True)
@@ -131,10 +135,9 @@ async def test_a_row_inserted_mid_paging_does_not_duplicate_or_skip(db: AsyncSes
     assert len(seen) == len(set(seen))
 
 
-async def test_deleted_users_are_absent_from_the_list(db: AsyncSession):
+async def test_deleted_users_are_absent_from_the_list(db: AsyncConnection):
     users = await create_users(db, 3)
     await user_repository.mark_deleted(db, users[0].id)
-    db.expunge_all()
 
     page = await user_service.list(db=db, cursor=None, size=10)
 
@@ -144,7 +147,7 @@ async def test_deleted_users_are_absent_from_the_list(db: AsyncSession):
 # ------------------------------------------------------------------- 수정
 
 
-async def test_owner_can_update_their_own_nickname(db: AsyncSession):
+async def test_owner_can_update_their_own_nickname(db: AsyncConnection):
     user = await create_user(db)
 
     updated = await user_service.update(
@@ -154,7 +157,7 @@ async def test_owner_can_update_their_own_nickname(db: AsyncSession):
     assert updated.nickname == '새이름'
 
 
-async def test_a_stranger_cannot_update_another_account(db: AsyncSession):
+async def test_a_stranger_cannot_update_another_account(db: AsyncConnection):
     """§4.6 / 규칙 #14 — 비교 대상은 넘겨받은 principal 이다.
 
     FBA 는 조회한 행의 id 와 비교해서 조건이 항상 참이 되었고, 관리자가 타인의 설정을
@@ -169,7 +172,7 @@ async def test_a_stranger_cannot_update_another_account(db: AsyncSession):
     assert caught.value.code == 'user.not_owner'
 
 
-async def test_a_superuser_can_update_anyone(db: AsyncSession):
+async def test_a_superuser_can_update_anyone(db: AsyncConnection):
     owner = await create_user(db)
 
     updated = await user_service.update(
@@ -182,7 +185,7 @@ async def test_a_superuser_can_update_anyone(db: AsyncSession):
     assert updated.nickname == '관리자수정'
 
 
-async def test_update_rejects_an_email_owned_by_someone_else(db: AsyncSession):
+async def test_update_rejects_an_email_owned_by_someone_else(db: AsyncConnection):
     owner = await create_user(db)
     other = await create_user(db, email='taken@example.com')
 
@@ -192,7 +195,7 @@ async def test_update_rejects_an_email_owned_by_someone_else(db: AsyncSession):
     assert caught.value.code == 'user.email_taken'
 
 
-async def test_update_accepts_the_users_own_email_unchanged(db: AsyncSession):
+async def test_update_accepts_the_users_own_email_unchanged(db: AsyncConnection):
     """자기 이메일을 그대로 다시 보내는 것은 충돌이 아니다."""
     user = await create_user(db)
 
@@ -203,44 +206,40 @@ async def test_update_accepts_the_users_own_email_unchanged(db: AsyncSession):
     assert updated.nickname == '그대로'
 
 
-async def test_update_leaves_omitted_fields_alone(db: AsyncSession):
+async def test_update_leaves_omitted_fields_alone(db: AsyncConnection):
     user = await create_user(db)
-    original_email = user.email
 
-    await user_service.update(db=db, pk=user.id, actor=Principal(id=user.id), obj=UpdateUser(nickname='변경'))
+    updated = await user_service.update(db=db, pk=user.id, actor=Principal(id=user.id), obj=UpdateUser(nickname='변경'))
 
-    assert user.email == original_email
+    assert updated.nickname == '변경'
+    assert updated.email == user.email
 
 
 # ------------------------------------------------------------------- 탈퇴
 
 
-async def test_delete_marks_the_row_with_its_own_id(db: AsyncSession):
+async def test_delete_marks_the_row_with_its_own_id(db: AsyncConnection):
     """§1.4 — hard delete 가 아니다."""
     user = await create_user(db)
-    user_id = user.id
 
-    await user_service.delete(db=db, pk=user_id, actor=Principal(id=user_id))
-    db.expunge_all()
+    await user_service.delete(db=db, pk=user.id, actor=Principal(id=user.id))
 
-    row = (
-        await db.execute(select(User).where(User.id == user_id).execution_options(include_deleted=True))
-    ).scalar_one()
-    assert row.deleted == user_id
+    row = await _row_including_deleted(db, user.id)
+    assert row is not None
+    assert row.deleted == user.id
 
 
-async def test_username_is_reusable_after_deletion(db: AsyncSession):
+async def test_username_is_reusable_after_deletion(db: AsyncConnection):
     """§1.4 를 쓰는 이유 전부. 탈퇴한 아이디로 재가입이 된다."""
     user = await create_user(db, username='gildong', email='gildong@example.com')
     await user_service.delete(db=db, pk=user.id, actor=Principal(id=user.id))
-    db.expunge_all()
 
     reborn = await user_service.create(db=db, obj=_new(username='gildong'))
 
     assert reborn.id != user.id
 
 
-async def test_a_stranger_cannot_delete_another_account(db: AsyncSession):
+async def test_a_stranger_cannot_delete_another_account(db: AsyncConnection):
     owner = await create_user(db)
     stranger = await create_user(db)
 

@@ -1,5 +1,8 @@
 """엔진 생성. **호출은 lifespan 만 한다** (§2.1) — 이 모듈은 함수만 제공한다.
 
+**여기가 이식성의 나머지 절반이다** (앞의 절반은 `types.py`). 방언별로 다른 것은
+전부 이 파일 안에서 갈린다. 밖에서 방언을 묻는 코드가 생기면 잘못 짠 것이다 (규칙 #18).
+
 SQLite 는 기본값이 서버 DB 와 다르다. 그냥 `create_async_engine` 만 부르면
 조용히 틀린 동작을 얻는다:
 
@@ -7,9 +10,11 @@ SQLite 는 기본값이 서버 DB 와 다르다. 그냥 `create_async_engine` �
 - **journal_mode 가 delete 다.** WAL 이라야 읽기가 쓰기에 막히지 않는다.
 - **잠금 대기가 0 이다.** 동시 쓰기에서 즉시 `database is locked` 가 난다.
 - **드라이버가 트랜잭션을 제멋대로 연다.** sqlite3 의 legacy `isolation_level` 때문에
-  DDL 앞에서 커밋이 새고 SAVEPOINT 가 어긋난다. 테스트의 롤백 격리(§2.8)가 여기 걸린다.
+  DDL 앞에서 커밋이 새고 SAVEPOINT 가 어긋난다. 테스트의 롤백 격리(§2.8)와
+  `TxDep` 의 중첩 트랜잭션(§1.1)이 여기 걸린다.
 
-마지막 항목이 특히 조용하다. 명시적 BEGIN 으로 드라이버의 자동 트랜잭션을 걷어낸다.
+서버 DB(PostgreSQL/MySQL)는 반대로 **커넥션 풀**이 문제가 된다. SQLite 는 파일이라
+풀 인자를 주면 에러가 나므로, 두 경우를 나눠서 만든다.
 """
 
 from pathlib import Path
@@ -51,6 +56,23 @@ def _install_sqlite_pragmas(engine: Engine, settings: Settings) -> None:
         connection.exec_driver_sql('BEGIN')
 
 
+def _pool_options(settings: Settings) -> dict[str, Any]:
+    """서버 DB 의 풀 설정. SQLite 는 파일이라 이 인자들을 받지 않는다.
+
+    `pool_pre_ping` 과 `pool_recycle` 이 특히 중요하다. 방화벽·프록시가 유휴 연결을
+    끊거나 MySQL 이 `wait_timeout` 으로 끊으면, 앱은 이미 죽은 연결을 들고 있다가
+    다음 요청에서 처음 알게 된다.
+    """
+    if settings.is_sqlite:
+        return {}
+    return {
+        'pool_size': settings.db_pool_size,
+        'max_overflow': settings.db_max_overflow,
+        'pool_pre_ping': settings.db_pool_pre_ping,
+        'pool_recycle': settings.db_pool_recycle_seconds,
+    }
+
+
 def create_engine(settings: Settings) -> AsyncEngine:
     """설정에서 엔진을 만든다. 연결은 아직 열리지 않는다 (lazy)."""
     if settings.is_sqlite:
@@ -59,7 +81,7 @@ def create_engine(settings: Settings) -> AsyncEngine:
             # 디렉터리가 없으면 sqlite 는 만들어주지 않고 그냥 실패한다.
             db_file.parent.mkdir(parents=True, exist_ok=True)
 
-    engine = create_async_engine(settings.database_url, echo=settings.db_echo)
+    engine = create_async_engine(settings.database_url, echo=settings.db_echo, **_pool_options(settings))
 
     if settings.is_sqlite:
         _install_sqlite_pragmas(engine.sync_engine, settings)
