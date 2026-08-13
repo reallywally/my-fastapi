@@ -85,6 +85,10 @@ async def create_user(db: TxDep, obj: CreateUserRequest): ...  # 쓰기: 자동 
 
 `crud` → `repository`로 개명. `crud`는 CRUD 5개만 있다는 인상을 주는데 실제로는 모든 쿼리가 여기 산다.
 
+**DTO 이름이 방향을 말한다.** 받는 것은 `~Request`, 내보내는 것은 `~Response`다 — `CreateUserRequest`, `UpdateUserRequest`, `UserResponse`. `UserOut` 같은 중립적인 이름은 들어오는 것인지 나가는 것인지 라우터를 열어봐야 알 수 있다. 다른 DTO 안에만 들어가는 조각과 공통 베이스는 밑줄로 시작한다 — 규칙 #26의 wire DTO와 같은 표시로, "단독으로 오가는 계약이 아니다"라는 뜻이다 (규칙 #32).
+
+이 규칙은 `modules/*/schema.py`에만 적용된다. `common/`의 공용 봉투(`Page`, `CursorParams`)는 특정 요청·응답에 묶이지 않는 재사용 타입이고, `common/db/schema.py`는 이름만 같을 뿐 테이블 컬럼 팩토리다.
+
 ### 1.3 stateless service + 모듈 전역 인스턴스
 
 **DI 컨테이너를 도입하지 않는다.** FBA 방식을 유지한다.
@@ -1210,6 +1214,7 @@ Phase 3에서 추가로 확정한 것:
 | 26 | wire DTO는 `gateway.py` 밖으로 나가지 않는다 | 유닛 테스트가 AST로 검사 |
 | 27 | POST/PATCH는 재시도하지 않는다 (명시 opt-in만) | `common/http/client.py` + 테스트 |
 | 28 | 업스트림 장애가 우리 readiness를 깨뜨리지 않는다 | e2e 테스트 (§5.7) |
+| 32 | 모듈 DTO는 `~Request`/`~Response`로 끝난다 | 유닛 테스트가 AST로 검사 |
 
 ---
 

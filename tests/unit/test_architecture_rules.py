@@ -17,8 +17,11 @@ from app.core.paths import APP_DIR
 
 SOURCE_FILES = sorted(APP_DIR.rglob('*.py'))
 SERVICE_AND_REPOSITORY_FILES = [p for p in SOURCE_FILES if p.name in {'service.py', 'repository.py'}]
+#: `common/db/schema.py` 는 이름만 같고 테이블 컬럼 팩토리다 — DTO 규칙의 대상이 아니다.
+MODULE_SCHEMA_FILES = [p for p in SOURCE_FILES if p.name == 'schema.py' and p.parent.parent.name == 'modules']
 
 HTTP_OBJECTS = {'Request', 'Response', 'UploadFile', 'WebSocket', 'BackgroundTasks'}
+DTO_SUFFIXES = ('Request', 'Response')
 IO_RESOURCE_FACTORIES = {
     'create_async_engine',
     'create_engine',
@@ -146,6 +149,42 @@ def test_rule_26_wire_dtos_stay_inside_their_gateway():
                 if private:
                     offenders.append(f'{_name(path)} → {private}')
     assert not offenders, f'wire DTO 가 gateway 밖에서 쓰인다: {offenders}'
+
+
+def _dto_names(tree: ast.Module) -> Iterator[str]:
+    """`schema.py` 의 최상위 DTO 이름.
+
+    `BaseModel` 을 직접 상속한 것만 보면 `class UpdateUserRequest(CreateUserRequest)` 를
+    놓친다. 파일 순서대로 훑으면서 앞서 DTO 로 판정된 이름을 상속한 것도 DTO 로 친다 —
+    Python 은 정의된 뒤에만 상속할 수 있으므로 한 번의 순회로 충분하다.
+    """
+    dtos: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases = {_dotted(base).split('.')[-1] for base in node.bases}
+        if 'BaseModel' in bases or bases & dtos:
+            dtos.add(node.name)
+            yield node.name
+
+
+@pytest.mark.skipif(not MODULE_SCHEMA_FILES, reason='아직 modules/*/schema.py 가 없다 (Phase 3~)')
+def test_rule_32_module_dtos_are_named_by_direction():
+    """규칙 #32 — 모듈 DTO 는 `~Request` / `~Response` 로 끝난다 (§1.2).
+
+    이름만 보고 방향을 알 수 있어야 한다. `UserOut` 은 들어오는 것인지 나가는 것인지
+    이름이 말해주지 않는다 — 알려면 라우터를 열어봐야 한다.
+
+    조각(다른 DTO 안에만 들어가는 모델)과 공통 베이스는 밑줄로 시작하는 이름으로 둔다.
+    규칙 #26 의 wire DTO 와 같은 표시다 — "이건 단독으로 오가는 계약이 아니다".
+    """
+    offenders = [
+        f'{_name(path)}::{dto}'
+        for path in MODULE_SCHEMA_FILES
+        for dto in _dto_names(_tree(path))
+        if not dto.startswith('_') and not dto.endswith(DTO_SUFFIXES)
+    ]
+    assert not offenders, f'DTO 이름이 방향을 말하지 않는다 — ~Request / ~Response 로 끝나야 한다: {offenders}'
 
 
 def test_rule_18_dialect_specifics_do_not_leak_into_modules():
