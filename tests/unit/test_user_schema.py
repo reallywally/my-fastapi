@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.modules.user.model import User, UserStatus
-from app.modules.user.schema import CreateUser, UpdateUser, UserOut
+from app.modules.user.schema import CreateUserRequest, UpdateUserRequest, UserResponse
 
 
 def _payload(**overrides) -> dict:
@@ -19,7 +19,7 @@ def _payload(**overrides) -> dict:
 
 
 def test_valid_payload():
-    obj = CreateUser(**_payload())
+    obj = CreateUserRequest(**_payload())
 
     assert obj.username == 'gildong'
     assert obj.nickname == '홍길동'
@@ -42,13 +42,13 @@ def test_valid_payload():
 )
 def test_rejected_payloads(field: str, value: str):
     with pytest.raises(ValidationError):
-        CreateUser(**_payload(**{field: value}))
+        CreateUserRequest(**_payload(**{field: value}))
 
 
 def test_user_out_never_exposes_the_password_hash():
     """응답 스키마는 허용 목록이다. 모델 필드를 늘려도 새어나가지 않는다."""
-    assert 'password_hash' not in UserOut.model_fields
-    assert 'password' not in UserOut.model_fields
+    assert 'password_hash' not in UserResponse.model_fields
+    assert 'password' not in UserResponse.model_fields
 
 
 def test_user_out_reads_from_the_row_object():
@@ -68,7 +68,7 @@ def test_user_out_reads_from_the_row_object():
         last_login_at=None,
     )
 
-    dumped = UserOut.model_validate(user).model_dump()
+    dumped = UserResponse.model_validate(user).model_dump()
 
     assert dumped['id'] == 7
     assert '$argon2id$secret' not in str(dumped)
@@ -76,9 +76,9 @@ def test_user_out_reads_from_the_row_object():
 
 def test_update_only_reports_the_fields_that_were_sent():
     """부분 수정 — 생략한 필드를 None 으로 덮어쓰면 데이터가 지워진다."""
-    assert UpdateUser(nickname='새이름').changes() == {'nickname': '새이름'}
-    assert UpdateUser().changes() == {}
+    assert UpdateUserRequest(nickname='새이름').changes() == {'nickname': '새이름'}
+    assert UpdateUserRequest().changes() == {}
 
 
 def test_update_ignores_explicit_nulls():
-    assert UpdateUser(nickname=None, email=None).changes() == {}
+    assert UpdateUserRequest(nickname=None, email=None).changes() == {}

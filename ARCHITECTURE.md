@@ -59,7 +59,7 @@ TxDep = Annotated[AsyncConnection, Depends(get_db_tx)]
 async def get_user(db: ConnDep, pk: int): ...           # 읽기: 끝나면 롤백
 
 @router.post('')
-async def create_user(db: TxDep, obj: CreateUser): ...  # 쓰기: 자동 커밋/롤백
+async def create_user(db: TxDep, obj: CreateUserRequest): ...  # 쓰기: 자동 커밋/롤백
 ```
 
 **읽기도 트랜잭션 안에서 돈다.** 한 요청이 두 번 조회하는 사이에 남의 커밋이 끼어들면 같은 요청 안에서 앞뒤가 다른 데이터를 본다. 끝에 롤백하는 것은 두 가지를 동시에 준다 — 요청 하나가 일관된 스냅샷을 보고, 읽기 의존성으로 들어온 쓰기는 밖으로 나가지 않는다.
@@ -236,7 +236,7 @@ RedisDep = Annotated[Redis, Depends(get_redis)]
 ```python
 class UserService:
     @staticmethod
-    async def update(*, db: AsyncConnection, redis: Redis, pk: int, obj: UpdateUser) -> int: ...
+    async def update(*, db: AsyncConnection, redis: Redis, pk: int, obj: UpdateUserRequest) -> int: ...
 ```
 
 얻는 것:
@@ -1104,7 +1104,7 @@ Phase 2에서 추가로 확정한 것:
 modules/<name>/
 ├─ __init__.py      # router 만 노출. bootstrap 이 보는 유일한 이름
 ├─ router.py        # HTTP. 읽기는 ConnDep, 쓰기는 TxDep (§1.1)
-├─ schema.py        # 요청/응답. UserOut 처럼 응답은 허용 목록으로 (해시 노출 방지)
+├─ schema.py        # 요청/응답. UserResponse 처럼 응답은 허용 목록으로 (해시 노출 방지)
 ├─ service.py       # 규칙. commit 금지, Request 금지, 에러는 코드로
 ├─ repository.py    # 쿼리만. select_alive() 를 쓰고, commit 은 하지 않는다
 ├─ model.py         # define_table() + 행 dataclass (Record / SoftDeletable)

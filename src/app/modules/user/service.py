@@ -20,12 +20,12 @@ from app.common.pagination import Page
 from app.common.security import Principal, hash_password
 from app.modules.user.model import User
 from app.modules.user.repository import user_repository
-from app.modules.user.schema import CreateUser, UpdateUser, UserOut
+from app.modules.user.schema import CreateUserRequest, UpdateUserRequest, UserResponse
 
 
 class UserService:
     @staticmethod
-    async def create(*, db: AsyncConnection, obj: CreateUser) -> User:
+    async def create(*, db: AsyncConnection, obj: CreateUserRequest) -> User:
         """가입.
 
         중복을 미리 확인하는 것은 **어느 필드가 겹쳤는지 알려주기 위해서**다.
@@ -57,17 +57,17 @@ class UserService:
         return user
 
     @classmethod
-    async def list(cls, *, db: AsyncConnection, cursor: int | None, size: int) -> Page[UserOut]:
+    async def list(cls, *, db: AsyncConnection, cursor: int | None, size: int) -> Page[UserResponse]:
         rows = await user_repository.list_page(db, cursor=cursor, size=size)
-        return Page[UserOut].of(
+        return Page[UserResponse].of(
             rows,
             size=size,
             cursor_of=lambda row: row.id,
-            to_item=UserOut.model_validate,
+            to_item=UserResponse.model_validate,
         )
 
     @classmethod
-    async def update(cls, *, db: AsyncConnection, pk: int, actor: Principal, obj: UpdateUser) -> User:
+    async def update(cls, *, db: AsyncConnection, pk: int, actor: Principal, obj: UpdateUserRequest) -> User:
         user = await cls.get(db=db, pk=pk)
         if not actor.can_act_on(user.id):
             raise ForbiddenError(code='user.not_owner')

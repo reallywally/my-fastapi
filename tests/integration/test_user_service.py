@@ -13,15 +13,15 @@ from app.common.errors import ConflictError, ForbiddenError, NotFoundError
 from app.common.security import Principal, verify_password
 from app.modules.user.model import User, user_table
 from app.modules.user.repository import user_repository
-from app.modules.user.schema import CreateUser, UpdateUser
+from app.modules.user.schema import CreateUserRequest, UpdateUserRequest
 from app.modules.user.service import user_service
 from tests.factories import DEFAULT_PASSWORD, create_user, create_users, user_fields
 
 pytestmark = pytest.mark.asyncio(loop_scope='session')
 
 
-def _new(**overrides) -> CreateUser:
-    return CreateUser(
+def _new(**overrides) -> CreateUserRequest:
+    return CreateUserRequest(
         **{
             'username': 'gildong',
             'email': 'gildong@example.com',
@@ -151,7 +151,7 @@ async def test_owner_can_update_their_own_nickname(db: AsyncConnection):
     user = await create_user(db)
 
     updated = await user_service.update(
-        db=db, pk=user.id, actor=Principal(id=user.id), obj=UpdateUser(nickname='새이름')
+        db=db, pk=user.id, actor=Principal(id=user.id), obj=UpdateUserRequest(nickname='새이름')
     )
 
     assert updated.nickname == '새이름'
@@ -167,7 +167,9 @@ async def test_a_stranger_cannot_update_another_account(db: AsyncConnection):
     stranger = await create_user(db)
 
     with pytest.raises(ForbiddenError) as caught:
-        await user_service.update(db=db, pk=owner.id, actor=Principal(id=stranger.id), obj=UpdateUser(nickname='탈취'))
+        await user_service.update(
+            db=db, pk=owner.id, actor=Principal(id=stranger.id), obj=UpdateUserRequest(nickname='탈취')
+        )
 
     assert caught.value.code == 'user.not_owner'
 
@@ -179,7 +181,7 @@ async def test_a_superuser_can_update_anyone(db: AsyncConnection):
         db=db,
         pk=owner.id,
         actor=Principal(id=owner.id + 1000, is_superuser=True),
-        obj=UpdateUser(nickname='관리자수정'),
+        obj=UpdateUserRequest(nickname='관리자수정'),
     )
 
     assert updated.nickname == '관리자수정'
@@ -190,7 +192,9 @@ async def test_update_rejects_an_email_owned_by_someone_else(db: AsyncConnection
     other = await create_user(db, email='taken@example.com')
 
     with pytest.raises(ConflictError) as caught:
-        await user_service.update(db=db, pk=owner.id, actor=Principal(id=owner.id), obj=UpdateUser(email=other.email))
+        await user_service.update(
+            db=db, pk=owner.id, actor=Principal(id=owner.id), obj=UpdateUserRequest(email=other.email)
+        )
 
     assert caught.value.code == 'user.email_taken'
 
@@ -200,7 +204,7 @@ async def test_update_accepts_the_users_own_email_unchanged(db: AsyncConnection)
     user = await create_user(db)
 
     updated = await user_service.update(
-        db=db, pk=user.id, actor=Principal(id=user.id), obj=UpdateUser(email=user.email, nickname='그대로')
+        db=db, pk=user.id, actor=Principal(id=user.id), obj=UpdateUserRequest(email=user.email, nickname='그대로')
     )
 
     assert updated.nickname == '그대로'
@@ -209,7 +213,9 @@ async def test_update_accepts_the_users_own_email_unchanged(db: AsyncConnection)
 async def test_update_leaves_omitted_fields_alone(db: AsyncConnection):
     user = await create_user(db)
 
-    updated = await user_service.update(db=db, pk=user.id, actor=Principal(id=user.id), obj=UpdateUser(nickname='변경'))
+    updated = await user_service.update(
+        db=db, pk=user.id, actor=Principal(id=user.id), obj=UpdateUserRequest(nickname='변경')
+    )
 
     assert updated.nickname == '변경'
     assert updated.email == user.email

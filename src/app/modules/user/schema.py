@@ -1,6 +1,6 @@
 """요청/응답 계약 (§1.2). 화면이 의존하는 모양이다 (§0).
 
-`UserOut` 은 **허용 목록**이다. 모델 필드를 늘려도 응답에 새어나가지 않는다 —
+`UserResponse` 은 **허용 목록**이다. 모델 필드를 늘려도 응답에 새어나가지 않는다 —
 `password_hash` 가 실수로 노출되는 사고는 보통 "모델을 그대로 직렬화" 에서 난다.
 """
 
@@ -20,14 +20,14 @@ Nickname = Annotated[str, Field(min_length=1, max_length=50, examples=['홍길�
 Password = Annotated[str, Field(min_length=8, max_length=128)]
 
 
-class CreateUser(BaseModel):
+class CreateUserRequest(BaseModel):
     username: Username
     email: EmailStr
     nickname: Nickname
     password: Password
 
 
-class UpdateUser(BaseModel):
+class UpdateUserRequest(BaseModel):
     """부분 수정. 준 필드만 바뀐다 — `None` 과 '생략' 을 구분해야 해서 전부 Optional 이다."""
 
     email: EmailStr | None = None
@@ -37,7 +37,7 @@ class UpdateUser(BaseModel):
         return self.model_dump(exclude_unset=True, exclude_none=True)
 
 
-class UserOut(BaseModel):
+class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int

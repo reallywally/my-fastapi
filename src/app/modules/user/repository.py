@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.common.db import alive, all_of, one_or_none, select_alive, soft_delete
 from app.modules.user.model import User, UserStatus, user_table
 
-#: 수정 가능한 컬럼. 스키마(`UpdateUser`)가 이미 거르지만, SET 절이 요청 본문에서 온
+#: 수정 가능한 컬럼. 스키마(`UpdateUserRequest`)가 이미 거르지만, SET 절이 요청 본문에서 온
 #: 이름으로 만들어지므로 여기서 한 번 더 못박는다.
 UPDATABLE: Final = frozenset({'email', 'nickname'})
 
