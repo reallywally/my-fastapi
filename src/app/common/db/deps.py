@@ -7,7 +7,7 @@
     async def get_post(db: ConnDep, pk: int): ...        # 읽기: 끝나면 무조건 롤백
 
     @router.post('')
-    async def create_post(db: TxDep, obj: CreatePost): ...  # 쓰기: 자동 커밋/롤백
+    async def create_post(db: TxDep, obj: CreatePostRequest): ...  # 쓰기: 자동 커밋/롤백
 
 **읽기도 트랜잭션 안에서 돈다.** 한 요청이 두 번 조회하는 사이에 남의 커밋이 끼어들면
 같은 요청 안에서 앞뒤가 다른 데이터를 본다. 끝에 롤백하는 것은 두 가지를 동시에 준다 —

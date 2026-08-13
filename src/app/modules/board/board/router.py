@@ -10,7 +10,7 @@
 from fastapi import APIRouter, status
 
 from app.common.db import ConnDep, TxDep
-from app.modules.board.board.schema import BoardOut, CreateBoard, UpdateBoard
+from app.modules.board.board.schema import BoardResponse, CreateBoardRequest, UpdateBoardRequest
 from app.modules.board.board.service import board_service
 from app.modules.user.deps import PrincipalDep
 
@@ -18,27 +18,27 @@ router = APIRouter(prefix='/boards', tags=['board'])
 
 
 @router.get('', summary='게시판 목록')
-async def list_boards(db: ConnDep) -> list[BoardOut]:
+async def list_boards(db: ConnDep) -> list[BoardResponse]:
     boards = await board_service.list(db=db)
-    return [BoardOut.model_validate(board) for board in boards]
+    return [BoardResponse.model_validate(board) for board in boards]
 
 
 @router.get('/{slug}', summary='게시판 상세')
-async def get_board(db: ConnDep, slug: str) -> BoardOut:
+async def get_board(db: ConnDep, slug: str) -> BoardResponse:
     board = await board_service.get_by_slug(db=db, slug=slug)
-    return BoardOut.model_validate(board)
+    return BoardResponse.model_validate(board)
 
 
 @router.post('', status_code=status.HTTP_201_CREATED, summary='게시판 생성 (관리자)')
-async def create_board(db: TxDep, obj: CreateBoard, actor: PrincipalDep) -> BoardOut:
+async def create_board(db: TxDep, obj: CreateBoardRequest, actor: PrincipalDep) -> BoardResponse:
     board = await board_service.create(db=db, obj=obj, actor=actor)
-    return BoardOut.model_validate(board)
+    return BoardResponse.model_validate(board)
 
 
 @router.patch('/{slug}', summary='게시판 수정 (관리자)')
-async def update_board(db: TxDep, slug: str, obj: UpdateBoard, actor: PrincipalDep) -> BoardOut:
+async def update_board(db: TxDep, slug: str, obj: UpdateBoardRequest, actor: PrincipalDep) -> BoardResponse:
     board = await board_service.update(db=db, slug=slug, obj=obj, actor=actor)
-    return BoardOut.model_validate(board)
+    return BoardResponse.model_validate(board)
 
 
 @router.delete('/{slug}', status_code=status.HTTP_204_NO_CONTENT, summary='게시판 삭제 (관리자)')

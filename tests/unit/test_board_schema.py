@@ -7,9 +7,9 @@
 import pytest
 from pydantic import ValidationError
 
-from app.modules.board.board.schema import BoardOut, CreateBoard, UpdateBoard
+from app.modules.board.board.schema import BoardResponse, CreateBoardRequest, UpdateBoardRequest
 from app.modules.board.post.model import PostStatus
-from app.modules.board.post.schema import CreatePost, PostOut, PostSummary, UpdatePost
+from app.modules.board.post.schema import CreatePostRequest, PostResponse, PostSummaryResponse, UpdatePostRequest
 
 
 def _board(**overrides) -> dict:
@@ -24,7 +24,7 @@ def _post(**overrides) -> dict:
 
 
 def test_board_defaults_are_public_read_member_write():
-    board = CreateBoard(**_board())
+    board = CreateBoardRequest(**_board())
 
     assert board.read_role == 'anonymous'
     assert board.write_role == 'member'
@@ -45,22 +45,22 @@ def test_board_defaults_are_public_read_member_write():
 )
 def test_board_rejects_bad_values(field: str, value: str):
     with pytest.raises(ValidationError):
-        CreateBoard(**_board(**{field: value}))
+        CreateBoardRequest(**_board(**{field: value}))
 
 
 def test_board_slug_cannot_be_updated():
     """URL 식별자가 바뀌면 그 게시판을 가리키던 모든 링크가 깨진다."""
-    assert 'slug' not in UpdateBoard.model_fields
+    assert 'slug' not in UpdateBoardRequest.model_fields
 
 
 def test_board_update_only_reports_the_fields_that_were_sent():
-    assert UpdateBoard(name='새 이름').changes() == {'name': '새 이름'}
-    assert UpdateBoard().changes() == {}
-    assert UpdateBoard(name=None).changes() == {}
+    assert UpdateBoardRequest(name='새 이름').changes() == {'name': '새 이름'}
+    assert UpdateBoardRequest().changes() == {}
+    assert UpdateBoardRequest(name=None).changes() == {}
 
 
 def test_board_out_is_an_allow_list():
-    assert set(BoardOut.model_fields) == {
+    assert set(BoardResponse.model_fields) == {
         'id',
         'slug',
         'name',
@@ -77,7 +77,7 @@ def test_board_out_is_an_allow_list():
 
 
 def test_post_defaults_to_published():
-    assert CreatePost(**_post()).status is PostStatus.published
+    assert CreatePostRequest(**_post()).status is PostStatus.published
 
 
 @pytest.mark.parametrize(
@@ -91,25 +91,25 @@ def test_post_defaults_to_published():
 )
 def test_post_rejects_bad_values(field: str, value: str):
     with pytest.raises(ValidationError):
-        CreatePost(**_post(**{field: value}))
+        CreatePostRequest(**_post(**{field: value}))
 
 
 def test_post_board_cannot_be_changed():
     """글을 다른 게시판으로 옮기면 권한 판정이 달라진다 (§4.6)."""
-    assert 'board_id' not in UpdatePost.model_fields
+    assert 'board_id' not in UpdatePostRequest.model_fields
 
 
 def test_post_update_only_reports_the_fields_that_were_sent():
-    assert UpdatePost(title='제목만').changes() == {'title': '제목만'}
-    assert UpdatePost().changes() == {}
+    assert UpdatePostRequest(title='제목만').changes() == {'title': '제목만'}
+    assert UpdatePostRequest().changes() == {}
 
 
 def test_the_list_item_carries_no_body():
     """목록 20개에 본문을 다 실으면 응답이 메가바이트가 되고, 화면은 쓰지도 않는다."""
-    assert 'content' not in PostSummary.model_fields
-    assert 'content' in PostOut.model_fields
+    assert 'content' not in PostSummaryResponse.model_fields
+    assert 'content' in PostResponse.model_fields
 
 
 def test_post_detail_extends_the_list_item():
     """상세는 목록 항목의 상위집합이다 — 화면이 두 모양을 따로 다루지 않아도 된다."""
-    assert set(PostSummary.model_fields) < set(PostOut.model_fields)
+    assert set(PostSummaryResponse.model_fields) < set(PostResponse.model_fields)

@@ -15,7 +15,7 @@ from app.common.errors import ConflictError, ForbiddenError, NotFoundError
 from app.common.security import Principal
 from app.modules.board.board.model import Board, board_table
 from app.modules.board.board.repository import board_repository
-from app.modules.board.board.schema import CreateBoard, UpdateBoard
+from app.modules.board.board.schema import CreateBoardRequest, UpdateBoardRequest
 from app.modules.board.board.service import board_service
 from tests.factories import board_fields, create_board
 
@@ -25,8 +25,8 @@ ADMIN = Principal(id=1, is_superuser=True)
 MEMBER = Principal(id=2)
 
 
-def _new(**overrides) -> CreateBoard:
-    return CreateBoard(**{'slug': 'notice', 'name': '공지사항'} | overrides)
+def _new(**overrides) -> CreateBoardRequest:
+    return CreateBoardRequest(**{'slug': 'notice', 'name': '공지사항'} | overrides)
 
 
 async def _row_including_deleted(db: AsyncConnection, pk: int) -> Board | None:
@@ -106,7 +106,7 @@ async def test_deleted_boards_disappear_from_the_list(db: AsyncConnection):
 async def test_an_admin_can_update_a_board(db: AsyncConnection):
     board = await create_board(db)
 
-    updated = await board_service.update(db=db, slug=board.slug, obj=UpdateBoard(name='새 이름'), actor=ADMIN)
+    updated = await board_service.update(db=db, slug=board.slug, obj=UpdateBoardRequest(name='새 이름'), actor=ADMIN)
 
     assert updated.name == '새 이름'
     assert updated.slug == board.slug
@@ -116,14 +116,14 @@ async def test_a_member_cannot_update_a_board(db: AsyncConnection):
     board = await create_board(db)
 
     with pytest.raises(ForbiddenError) as caught:
-        await board_service.update(db=db, slug=board.slug, obj=UpdateBoard(name='탈취'), actor=MEMBER)
+        await board_service.update(db=db, slug=board.slug, obj=UpdateBoardRequest(name='탈취'), actor=MEMBER)
 
     assert caught.value.code == 'board.admin_only'
 
 
 async def test_the_slug_cannot_be_changed(db: AsyncConnection):
     """URL 식별자가 바뀌면 그 게시판을 가리키던 모든 링크가 깨진다 — 스키마에 필드가 없다."""
-    assert 'slug' not in UpdateBoard.model_fields
+    assert 'slug' not in UpdateBoardRequest.model_fields
 
     changes: dict[str, Any] = {'slug': 'hijacked'}
     with pytest.raises(ValueError, match='수정할 수 없는 컬럼'):

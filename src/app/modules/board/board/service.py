@@ -13,12 +13,12 @@ from app.common.errors import ConflictError, ForbiddenError, NotFoundError
 from app.common.security import Principal
 from app.modules.board.board.model import Board
 from app.modules.board.board.repository import board_repository
-from app.modules.board.board.schema import CreateBoard, UpdateBoard
+from app.modules.board.board.schema import CreateBoardRequest, UpdateBoardRequest
 
 
 class BoardService:
     @staticmethod
-    async def create(*, db: AsyncConnection, obj: CreateBoard, actor: Principal) -> Board:
+    async def create(*, db: AsyncConnection, obj: CreateBoardRequest, actor: Principal) -> Board:
         """게시판 생성은 관리자만.
 
         소유권이 아니라 **역할** 판정이라 `can_act_on` 이 아니다. 게시판에는 주인이 없다.
@@ -57,7 +57,7 @@ class BoardService:
         return await board_repository.list_all(db)
 
     @classmethod
-    async def update(cls, *, db: AsyncConnection, slug: str, obj: UpdateBoard, actor: Principal) -> Board:
+    async def update(cls, *, db: AsyncConnection, slug: str, obj: UpdateBoardRequest, actor: Principal) -> Board:
         board = await cls.get_by_slug(db=db, slug=slug)
         if not actor.is_superuser:
             raise ForbiddenError(code='board.admin_only')

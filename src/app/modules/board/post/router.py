@@ -16,7 +16,7 @@ from fastapi import APIRouter, status
 from app.common.db import ConnDep, TxDep
 from app.common.pagination import CursorDep, Page
 from app.modules.board.board.deps import BoardReadDep, BoardWriteDep
-from app.modules.board.post.schema import CreatePost, PostOut, PostSummary, UpdatePost
+from app.modules.board.post.schema import CreatePostRequest, PostResponse, PostSummaryResponse, UpdatePostRequest
 from app.modules.board.post.service import post_service
 from app.modules.user.deps import PrincipalDep
 
@@ -28,26 +28,26 @@ router = APIRouter(prefix='/posts', tags=['post'])
 
 
 @board_router.get('', summary='글 목록 (커서 페이지네이션)')
-async def list_posts(db: ConnDep, board: BoardReadDep, page: CursorDep) -> Page[PostSummary]:
+async def list_posts(db: ConnDep, board: BoardReadDep, page: CursorDep) -> Page[PostSummaryResponse]:
     return await post_service.list(db=db, board_id=board.id, cursor=page.cursor, size=page.size)
 
 
 @board_router.post('', status_code=status.HTTP_201_CREATED, summary='글 작성')
-async def create_post(db: TxDep, board: BoardWriteDep, obj: CreatePost, actor: PrincipalDep) -> PostOut:
+async def create_post(db: TxDep, board: BoardWriteDep, obj: CreatePostRequest, actor: PrincipalDep) -> PostResponse:
     post = await post_service.create(db=db, board_id=board.id, actor=actor, obj=obj)
-    return PostOut.model_validate(post)
+    return PostResponse.model_validate(post)
 
 
 @router.get('/{pk}', summary='글 상세')
-async def get_post(db: ConnDep, pk: int) -> PostOut:
+async def get_post(db: ConnDep, pk: int) -> PostResponse:
     post = await post_service.get(db=db, pk=pk)
-    return PostOut.model_validate(post)
+    return PostResponse.model_validate(post)
 
 
 @router.patch('/{pk}', summary='글 수정 (본인 또는 관리자)')
-async def update_post(db: TxDep, pk: int, obj: UpdatePost, actor: PrincipalDep) -> PostOut:
+async def update_post(db: TxDep, pk: int, obj: UpdatePostRequest, actor: PrincipalDep) -> PostResponse:
     post = await post_service.update(db=db, pk=pk, actor=actor, obj=obj)
-    return PostOut.model_validate(post)
+    return PostResponse.model_validate(post)
 
 
 @router.delete('/{pk}', status_code=status.HTTP_204_NO_CONTENT, summary='글 삭제 (본인 또는 관리자)')

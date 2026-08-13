@@ -18,12 +18,12 @@ from app.common.pagination import Page
 from app.common.security import Principal
 from app.modules.board.post.model import Post, PostStatus
 from app.modules.board.post.repository import post_repository
-from app.modules.board.post.schema import CreatePost, PostSummary, UpdatePost
+from app.modules.board.post.schema import CreatePostRequest, PostSummaryResponse, UpdatePostRequest
 
 
 class PostService:
     @staticmethod
-    async def create(*, db: AsyncConnection, board_id: int, actor: Principal, obj: CreatePost) -> Post:
+    async def create(*, db: AsyncConnection, board_id: int, actor: Principal, obj: CreatePostRequest) -> Post:
         """작성. 게시판 쓰기 권한은 라우터의 `BoardWriteDep` 가 이미 확인했다 (§4.6)."""
         return await post_repository.insert(
             db,
@@ -50,7 +50,7 @@ class PostService:
         return post
 
     @staticmethod
-    async def list(*, db: AsyncConnection, board_id: int, cursor: int | None, size: int) -> Page[PostSummary]:
+    async def list(*, db: AsyncConnection, board_id: int, cursor: int | None, size: int) -> Page[PostSummaryResponse]:
         """§4.3 — keyset 목록. 고정글은 **첫 페이지에만** 앞에 붙인다.
 
         고정글을 매 페이지에 붙이면 스크롤할 때마다 같은 글이 반복되고, 정렬 키에
@@ -58,19 +58,19 @@ class PostService:
         `has_next` 와 `next_cursor` 는 고정글이 아닌 쪽에서만 나온다.
         """
         rows = await post_repository.list_page(db, board_id=board_id, cursor=cursor, size=size)
-        page = Page[PostSummary].of(
+        page = Page[PostSummaryResponse].of(
             rows,
             size=size,
             cursor_of=lambda row: row.id,
-            to_item=PostSummary.model_validate,
+            to_item=PostSummaryResponse.model_validate,
         )
         if cursor is None:
             pinned = await post_repository.list_pinned(db, board_id=board_id)
-            page.items = [PostSummary.model_validate(row) for row in pinned] + page.items
+            page.items = [PostSummaryResponse.model_validate(row) for row in pinned] + page.items
         return page
 
     @classmethod
-    async def update(cls, *, db: AsyncConnection, pk: int, actor: Principal, obj: UpdatePost) -> Post:
+    async def update(cls, *, db: AsyncConnection, pk: int, actor: Principal, obj: UpdatePostRequest) -> Post:
         post = await cls.get(db=db, pk=pk)
         if not actor.can_act_on(post.author_id):
             raise ForbiddenError(code='post.not_owner')

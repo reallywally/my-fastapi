@@ -1,6 +1,6 @@
 """게시판의 요청/응답 계약 (§1.2, §0).
 
-`BoardOut` 은 허용 목록이다. 모델에 필드를 늘려도 응답에 새어나가지 않는다.
+`BoardResponse` 은 허용 목록이다. 모델에 필드를 늘려도 응답에 새어나가지 않는다.
 """
 
 from typing import Annotated
@@ -15,7 +15,7 @@ BoardName = Annotated[str, Field(min_length=1, max_length=100, examples=['공지
 Role = Annotated[str, Field(min_length=1, max_length=50, examples=['anonymous', 'member'])]
 
 
-class CreateBoard(BaseModel):
+class CreateBoardRequest(BaseModel):
     slug: Slug
     name: BoardName
     description: str | None = None
@@ -26,7 +26,7 @@ class CreateBoard(BaseModel):
     display_order: int = 0
 
 
-class UpdateBoard(BaseModel):
+class UpdateBoardRequest(BaseModel):
     """부분 수정. 준 필드만 바뀐다 — `None` 과 '생략' 을 구분해야 해서 전부 Optional 이다.
 
     `slug` 는 없다. URL 식별자가 바뀌면 그 게시판을 가리키던 모든 링크가 깨진다.
@@ -44,7 +44,7 @@ class UpdateBoard(BaseModel):
         return self.model_dump(exclude_unset=True, exclude_none=True)
 
 
-class BoardOut(BaseModel):
+class BoardResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int

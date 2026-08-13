@@ -18,7 +18,7 @@ from app.common.errors import ForbiddenError, NotFoundError
 from app.common.security import Principal
 from app.modules.board.post.model import Post, PostStatus, post_table
 from app.modules.board.post.repository import post_repository
-from app.modules.board.post.schema import CreatePost, UpdatePost
+from app.modules.board.post.schema import CreatePostRequest, UpdatePostRequest
 from app.modules.board.post.service import post_service
 from tests.factories import create_board, create_post, create_posts, create_user
 
@@ -53,7 +53,7 @@ async def test_create_stores_the_author_from_the_principal(db: AsyncConnection):
         db=db,
         board_id=board_id,
         actor=Principal(id=user_id),
-        obj=CreatePost(title='제목', content='본문'),
+        obj=CreatePostRequest(title='제목', content='본문'),
     )
 
     assert post.author_id == user_id
@@ -227,7 +227,7 @@ async def test_the_author_can_update_their_own_post(db: AsyncConnection):
     post = await create_post(db, board_id=board_id, author_id=user_id)
 
     updated = await post_service.update(
-        db=db, pk=post.id, actor=Principal(id=user_id), obj=UpdatePost(title='고친 제목')
+        db=db, pk=post.id, actor=Principal(id=user_id), obj=UpdatePostRequest(title='고친 제목')
     )
 
     assert updated.title == '고친 제목'
@@ -244,7 +244,9 @@ async def test_a_stranger_cannot_update_another_persons_post(db: AsyncConnection
     post = await create_post(db, board_id=board_id, author_id=user_id)
 
     with pytest.raises(ForbiddenError) as caught:
-        await post_service.update(db=db, pk=post.id, actor=Principal(id=user_id + 999), obj=UpdatePost(title='탈취'))
+        await post_service.update(
+            db=db, pk=post.id, actor=Principal(id=user_id + 999), obj=UpdatePostRequest(title='탈취')
+        )
 
     assert caught.value.code == 'post.not_owner'
 
@@ -257,7 +259,7 @@ async def test_a_superuser_can_update_anyones_post(db: AsyncConnection):
         db=db,
         pk=post.id,
         actor=Principal(id=user_id + 999, is_superuser=True),
-        obj=UpdatePost(title='관리자 수정'),
+        obj=UpdatePostRequest(title='관리자 수정'),
     )
 
     assert updated.title == '관리자 수정'
@@ -268,7 +270,7 @@ async def test_update_leaves_omitted_fields_alone(db: AsyncConnection):
     post = await create_post(db, board_id=board_id, author_id=user_id)
 
     updated = await post_service.update(
-        db=db, pk=post.id, actor=Principal(id=user_id), obj=UpdatePost(content='본문만 교체')
+        db=db, pk=post.id, actor=Principal(id=user_id), obj=UpdatePostRequest(content='본문만 교체')
     )
 
     assert updated.content == '본문만 교체'
@@ -277,7 +279,7 @@ async def test_update_leaves_omitted_fields_alone(db: AsyncConnection):
 
 async def test_the_board_cannot_be_changed(db: AsyncConnection):
     """글을 다른 게시판으로 옮기면 권한 판정이 달라진다 (§4.6). 스키마에 필드가 없다."""
-    assert 'board_id' not in UpdatePost.model_fields
+    assert 'board_id' not in UpdatePostRequest.model_fields
 
     changes: dict[str, Any] = {'board_id': 2}
     with pytest.raises(ValueError, match='수정할 수 없는 컬럼'):

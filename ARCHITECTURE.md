@@ -753,7 +753,7 @@ BoardWriteDep = Annotated[Board, Depends(require_board('write'))]
 class PostService:
     @staticmethod
     async def update(*, db: AsyncConnection, post_id: int, actor_id: int,
-                     is_admin: bool, obj: UpdatePost) -> None:
+                     is_admin: bool, obj: UpdatePostRequest) -> None:
         post = await post_repo.get(db, post_id)
         if post is None:
             raise NotFoundError(code='post.not_found')

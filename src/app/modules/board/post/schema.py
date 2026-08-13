@@ -1,6 +1,6 @@
 """글의 요청/응답 계약 (§1.2, §0).
 
-**목록과 상세의 응답이 다르다.** `PostSummary` 에는 `content` 가 없다 — 목록 20개에
+**목록과 상세의 응답이 다르다.** `PostSummaryResponse` 에는 `content` 가 없다 — 목록 20개에
 본문을 다 실으면 응답이 메가바이트 단위가 되고, 화면은 그걸 쓰지도 않는다.
 """
 
@@ -16,13 +16,13 @@ Title = Annotated[str, Field(min_length=1, max_length=200, examples=['공지: �
 Content = Annotated[str, Field(min_length=1, max_length=100_000)]
 
 
-class CreatePost(BaseModel):
+class CreatePostRequest(BaseModel):
     title: Title
     content: Content
     status: PostStatus = PostStatus.published
 
 
-class UpdatePost(BaseModel):
+class UpdatePostRequest(BaseModel):
     """부분 수정. 준 필드만 바뀐다.
 
     `board_id` 는 없다. 글을 다른 게시판으로 옮기는 것은 권한 판정이 달라지는 동작이라
@@ -37,7 +37,7 @@ class UpdatePost(BaseModel):
         return self.model_dump(exclude_unset=True, exclude_none=True)
 
 
-class PostSummary(BaseModel):
+class PostSummaryResponse(BaseModel):
     """목록 항목. 본문이 없다."""
 
     model_config = ConfigDict(from_attributes=True)
@@ -53,7 +53,7 @@ class PostSummary(BaseModel):
     created_at: datetime
 
 
-class PostOut(PostSummary):
+class PostResponse(PostSummaryResponse):
     """상세. 목록 항목에 본문을 더한 것이다."""
 
     content: str
