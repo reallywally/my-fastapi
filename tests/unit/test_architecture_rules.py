@@ -17,8 +17,9 @@ from app.core.paths import APP_DIR
 
 SOURCE_FILES = sorted(APP_DIR.rglob('*.py'))
 SERVICE_AND_REPOSITORY_FILES = [p for p in SOURCE_FILES if p.name in {'service.py', 'repository.py'}]
-#: `common/db/schema.py` 는 이름만 같고 테이블 컬럼 팩토리다 — DTO 규칙의 대상이 아니다.
-MODULE_SCHEMA_FILES = [p for p in SOURCE_FILES if p.name == 'schema.py' and p.parent.parent.name == 'modules']
+#: 깊이를 고정하지 않는다 — `modules/board/post/schema.py` 처럼 컨텍스트 안에 모듈이
+#: 중첩된다 (§4.1). `common/db/schema.py` 는 이름만 같고 테이블 컬럼 팩토리라 빠진다.
+MODULE_SCHEMA_FILES = [p for p in SOURCE_FILES if p.name == 'schema.py' and 'modules' in p.relative_to(APP_DIR).parts]
 
 HTTP_OBJECTS = {'Request', 'Response', 'UploadFile', 'WebSocket', 'BackgroundTasks'}
 DTO_SUFFIXES = ('Request', 'Response')
