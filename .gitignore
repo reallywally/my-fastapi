@@ -32,6 +32,10 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Claude Code 작업 디렉터리. worktrees/ 안에 별도 git 저장소가 생겨서
+# `git add -A` 가 임베디드 저장소로 잡는다.
+.claude/
+
 # SQLite (DB 는 파일이다 — 절대 커밋하지 않는다)
 var/
 *.db
