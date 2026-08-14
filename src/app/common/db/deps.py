@@ -17,7 +17,7 @@
 """
 
 from collections.abc import AsyncGenerator, Callable
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -47,6 +47,24 @@ async def begin(connection: AsyncConnection) -> AsyncTransaction:
     return await (connection.begin_nested() if connection.in_transaction() else connection.begin())
 
 
+@asynccontextmanager
+async def write_transaction(source: ConnectionSource) -> AsyncGenerator[AsyncConnection, None]:
+    """쓰기 트랜잭션 하나. 정상 종료 시 커밋, 예외 시 롤백.
+
+    HTTP 를 모른다. 그래서 요청 밖에서도 쓸 수 있다 — 백그라운드 작업이 여기를
+    거친다 (`bootstrap/jobs.py`). 커밋 규칙이 두 벌이 되면 한쪽만 고치는 날이 온다.
+    """
+    async with source() as connection:
+        transaction = await begin(connection)
+        try:
+            yield connection
+        except BaseException:
+            await transaction.rollback()
+            raise
+        else:
+            await transaction.commit()
+
+
 async def get_db(request: Request) -> AsyncGenerator[AsyncConnection, None]:
     """읽기 전용 연결. 트랜잭션을 열되 끝나면 무조건 롤백한다."""
     async with get_connection_source(request)() as connection:
@@ -58,16 +76,9 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncConnection, None]:
 
 
 async def get_db_tx(request: Request) -> AsyncGenerator[AsyncConnection, None]:
-    """쓰기 연결. 정상 종료 시 커밋, 예외 시 롤백."""
-    async with get_connection_source(request)() as connection:
-        transaction = await begin(connection)
-        try:
-            yield connection
-        except BaseException:
-            await transaction.rollback()
-            raise
-        else:
-            await transaction.commit()
+    """쓰기 연결. 커밋·롤백 판정은 `write_transaction` 이 한다."""
+    async with write_transaction(get_connection_source(request)) as connection:
+        yield connection
 
 
 ConnDep = Annotated[AsyncConnection, Depends(get_db)]

@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.bootstrap.app import create_app
 from app.common.db.engine import create_engine
+from app.common.storage import LocalStorage
 from app.core.config import Settings, get_settings
 from app.core.constants import JournalMode
 from app.core.paths import ALEMBIC_INI, MIGRATIONS_DIR
@@ -56,6 +57,8 @@ def settings() -> Iterator[Settings]:
         overrides = {
             'ENVIRONMENT': 'test',
             'DATABASE_URL': f'sqlite+aiosqlite:///{Path(tmp) / "test.db"}',
+            # 업로드도 임시 디렉터리 안에 떨어진다. 테스트가 끝나면 통째로 사라진다.
+            'STORAGE_ROOT': str(Path(tmp) / 'uploads'),
             # 임시 파일이라 크래시 내구성이 필요 없다. WAL 보조 파일도 안 남는다.
             'DB_JOURNAL_MODE': JournalMode.memory.value,
             'REDIS_URL': os.getenv('TEST_REDIS_URL', 'redis://localhost:6379/15'),
@@ -83,8 +86,18 @@ def redis_client(settings: Settings):
     return FakeAsyncRedis(decode_responses=True)
 
 
+@pytest.fixture(scope='session')
+def storage(settings: Settings) -> LocalStorage:
+    """임시 디렉터리 위의 진짜 로컬 저장소. 목이 아니다 — DB 와 같은 원칙이다 (§2.8).
+
+    `settings.storage_root` 는 `settings` 픽스처가 임시 디렉터리로 덮어쓴다. 실제
+    파일이 쓰이고 지워지는지까지 확인해야 §4.9 의 고아 정리를 검증할 수 있다.
+    """
+    return LocalStorage(Path(settings.storage_root))
+
+
 @pytest_asyncio.fixture(scope='session', loop_scope='session')
-async def app(settings: Settings, redis_client) -> AsyncGenerator:
+async def app(settings: Settings, redis_client, storage: LocalStorage) -> AsyncGenerator:
     """lifespan 을 돌리지 않고 `app.state` 를 직접 채운다.
 
     `create_app()` 이 자원을 만들지 않기 때문에 가능한 일이다 (§2.1).
@@ -94,6 +107,7 @@ async def app(settings: Settings, redis_client) -> AsyncGenerator:
     application.state.engine = engine
     application.state.db_source = engine.connect
     application.state.redis = redis_client
+    application.state.storage = storage
 
     await run_migrations(engine)
 

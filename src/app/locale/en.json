@@ -32,5 +32,12 @@
   "upstream.timeout": "An external service is slow to respond. Please try again shortly.",
   "upstream.unavailable": "We could not reach an external service.",
   "upstream.bad_status": "An external service could not handle the request.",
-  "upstream.bad_payload": "We could not make sense of an external service response."
+  "upstream.bad_payload": "We could not make sense of an external service response.",
+  "attachment.not_found": "Attachment not found.",
+  "attachment.not_owner": "You can only change files you uploaded.",
+  "attachment.not_allowed": "This board does not accept attachments.",
+  "attachment.unsupported_type": "This file type is not allowed.",
+  "attachment.too_large": "The file exceeds the maximum allowed size.",
+  "attachment.empty": "An empty file cannot be uploaded.",
+  "attachment.no_filename": "The file has no name."
 }

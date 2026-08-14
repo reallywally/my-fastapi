@@ -1,5 +1,14 @@
 from app.common.db.base import METADATA, NAMING_CONVENTION
-from app.common.db.deps import ConnDep, ConnectionSource, TxDep, begin, get_connection_source, get_db, get_db_tx
+from app.common.db.deps import (
+    ConnDep,
+    ConnectionSource,
+    TxDep,
+    begin,
+    get_connection_source,
+    get_db,
+    get_db_tx,
+    write_transaction,
+)
 from app.common.db.engine import create_engine
 from app.common.db.model import Record, SoftDeletable
 from app.common.db.schema import define_table, deleted_column, id_column, timestamp_columns
@@ -33,4 +42,5 @@ __all__ = [
     'soft_delete',
     'timestamp_columns',
     'utcnow',
+    'write_transaction',
 ]

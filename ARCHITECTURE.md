@@ -174,7 +174,7 @@ boolean이면 `unique(username)` 때문에 삭제된 아이디를 재사용할 �
 | `ALTER TABLE`이 거의 없다 | 컬럼 변경·삭제 리비전이 실행 시점에 죽는다 | alembic `render_as_batch=True` |
 
 **SQLite라서 지금 포기하는 것:**
-- **§4.8 전문검색은 FTS5로 간다.** `TSVECTOR` + GIN은 없다. 이건 어떤 추상화로도 안 덮이는 자리고, 방언을 옮기면 다시 짜야 한다
+- **§4.8 전문검색은 아예 하지 않는다.** `TSVECTOR` + GIN도 FTS5도 없다. 붙인다면 어떤 추상화로도 안 덮이는 자리고, 방언을 옮기면 다시 짜야 한다
 - **쓰기는 한 번에 하나다.** WAL이 읽기를 풀어줄 뿐 쓰기 직렬화는 그대로다 → **§4.5 조회수 버퍼링이 선택이 아니라 필수가 된다**
 - 수평 확장 불가. 필요해지는 시점이 곧 방언을 옮기는 시점이다
 - snowflake PK 옵션은 접는다. 분산 쓰기가 없으면 의미가 없다
@@ -535,7 +535,7 @@ modules/user/
 
 여기까지는 뼈대 이야기였다. 이 절은 **이 서버가 실제로 무엇을 하는지**를 정의한다.
 
-범위: 게시판(카테고리) → 게시글 → 댓글. 여기에 첨부파일·조회수·검색.
+범위: 게시판(카테고리) → 게시글 → 댓글. 여기에 첨부파일·조회수. 검색은 뺐다 (§4.8).
 
 ### 4.1 바운디드 컨텍스트로 묶는다
 
@@ -620,7 +620,6 @@ post_table = define_table(
     Column('comment_count', Integer, default=0, nullable=False),          # 비정규화 (§4.4)
     Index('ix_post_list', 'board_id', 'deleted', 'id'),                   # 목록 커서 (§4.3)
     Index('ix_post_author', 'author_id', 'deleted'),
-    # 전문검색은 별도 FTS5 가상 테이블이다 (§4.8). 여기에 컬럼을 두지 않는다.
 )
 ```
 
@@ -780,33 +779,23 @@ soft delete(§1.4, §2.4)라 행은 남는다. 문제는 트리가 끊기는 경
 
 응답에서 `is_removed` 댓글은 `content`를 비우고 작성자를 익명화한다. 마스킹은 **schema 계층**에서 한다 — 서비스가 응답 형태를 신경 쓰기 시작하면 §2.7 누수와 같은 문제다.
 
-### 4.8 검색
+### 4.8 검색 — 지금은 하지 않는다
 
-`LIKE '%키워드%'`는 인덱스를 못 탄다. **SQLite FTS5**를 쓴다 — §1.6에서 Postgres를 접었으므로 `TSVECTOR` + GIN은 없다.
+**전문검색을 넣었다가 걷어냈다.** 여기 남기는 것은 그 판단이다 — 다시 붙일 때 같은 결론을 처음부터 다시 유도하지 않기 위해서다.
 
-`TSVECTOR` 생성 컬럼과 결정적으로 다른 점: FTS5는 **별도 가상 테이블**이라 원본과 자동으로 동기화되지 않는다.
+전제는 그대로다. `LIKE '%키워드%'`는 인덱스를 못 탄다. 앞에 `%`가 붙으면 모든 행의 본문을 훑어야 하고, 글이 늘어나는 만큼 정직하게 느려진다. **검색을 하려면 역색인이 필요하다.**
 
-```sql
-CREATE VIRTUAL TABLE post_fts USING fts5(
-    title, content,
-    content='post', content_rowid='id',   -- external content: 본문을 중복 저장하지 않는다
-    tokenize='unicode61'
-);
-```
+SQLite에서 그 자리는 **FTS5**였다 (§1.6에서 Postgres를 접었으므로 `TSVECTOR` + GIN은 없다). 실제로 만들어 보고 확인한 것들:
 
-동기화는 **트리거로 DB에 맡긴다.** 앱이 인덱싱을 기억해야 하면 §2.4의 `deleted=0`과 같은 실수가 반복된다 — 어딘가에서 반드시 빠뜨린다.
-
-```sql
-CREATE TRIGGER post_fts_insert AFTER INSERT ON post BEGIN
-    INSERT INTO post_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
-END;
--- update / delete 트리거도 같이. external content 는 삭제 시 'delete' 명령 행을 넣어야 한다
-```
-
-- 가상 테이블과 트리거는 alembic이 autogenerate하지 못한다. **리비전을 손으로 쓴다** — 그래서 §2.3의 "마이그레이션이 유일한 소스" 가 여기서 더 중요해진다
-- 토크나이저는 `unicode61`로 시작한다. **한국어 형태소 분석은 안 된다** — 어절 단위 매칭이다. 실제로 부족해지면 그때 검색엔진을 붙인다 (§3.1과 같은 원칙: 필요해진 뒤에, 정적으로)
+- FTS5는 **별도 가상 테이블**이라 원본과 자동으로 동기화되지 않는다. 동기화는 트리거로 DB에 맡겨야 한다 — 앱이 인덱싱을 기억하면 §2.4의 `deleted=0`과 같은 실수가 반복된다
+- 가상 테이블과 트리거는 alembic이 autogenerate하지 못한다. **리비전을 손으로 쓴다**
 - **soft delete와 FTS는 자동으로 연결되지 않는다.** `alive()`(§2.4)는 우리 테이블의 조건이라 가상 테이블에 붙지 않는다. FTS 결과를 `post`와 조인해서 걸러야 한다
-- 검색도 §4.3의 커서 페이지네이션을 쓴다. `rank` 정렬이 필요해지면 커서 키가 `(rank, id)` 복합이 된다
+- 토크나이저 `unicode61`은 **한국어 형태소 분석을 하지 않는다.** 어절 단위 매칭이라 "점검"으로 "점검을"이 찾히지 않는다
+- FTS5의 질의 문법(`AND`/`NOT`/`*`/`"`)을 열어주면 **검색엔진의 문법이 우리 API 계약이 된다.** 막지 않으면 따옴표 하나에 500이 난다
+
+**뺀 이유:** 트리거는 검색을 하지 않아도 돈다. 글을 쓸 때마다, 고칠 때마다(삭제 + 삽입으로 두 번) 색인에 쓴다. SQLite는 쓰기가 DB 전체에 하나뿐이라(§1.6) 쓰지 않을 색인의 쓰기 비용이 그대로 서버의 쓰기 비용이 된다. **쓸지 안 쓸지 모르는 기능을 위해 모든 글쓰기에 세금을 매기지 않는다** — §3.1과 같은 원칙이다.
+
+**다시 붙인다면** 위의 다섯 가지가 그대로 과제고, 방언 전용 코드는 `common/db/fts.py` 한 파일에 가두면 된다(규칙 #18). 한국어 검색 품질이 실제로 문제가 되는 시점이라면 그때는 FTS5가 아니라 검색엔진을 보는 것이 맞다.
 
 ### 4.9 첨부파일
 
@@ -833,12 +822,14 @@ async def upload(post_id: int, file: UploadFile, db: TxDep,
 ```
 GET    /api/v1/boards                                게시판 목록
 GET    /api/v1/boards/{slug}/posts?cursor=&size=     글 목록 (keyset)      [read_role]
-GET    /api/v1/boards/{slug}/posts/search?q=         검색                  [read_role]
 POST   /api/v1/boards/{slug}/posts                   글 작성               [write_role]
 GET    /api/v1/posts/{id}                            글 상세 (+조회수)     [read_role]
 PATCH  /api/v1/posts/{id}                            글 수정               [본인/관리자]
 DELETE /api/v1/posts/{id}                            글 삭제               [본인/관리자]
 POST   /api/v1/posts/{id}/attachments                첨부 업로드           [본인]
+GET    /api/v1/posts/{id}/attachments                첨부 목록             [read_role]
+GET    /api/v1/attachments/{id}                       첨부 다운로드         [read_role]
+DELETE /api/v1/attachments/{id}                       첨부 삭제             [본인/관리자]
 GET    /api/v1/posts/{id}/comments                   댓글 트리
 POST   /api/v1/posts/{id}/comments                   댓글 작성             [write_role]
 PATCH  /api/v1/comments/{id}                         댓글 수정             [본인]
@@ -1020,6 +1011,7 @@ my-fastapi/
    ├─ common/                   # core만 import
    │  ├─ db/                    #   engine, deps, Table 도구, 행 dataclass, 쿼리 조각
    │  ├─ cache/                 #   redis 헬퍼
+   │  ├─ storage/               #   파일 저장소 인터페이스 + 로컬 구현 (§4.9). 바이트만 안다
    │  ├─ security/              #   token encode/decode, hashing, Principal — 도메인 무지
    │  ├─ http/                  #   업스트림 전송 계층 (§5). 상대가 무슨 서버인지 모른다
    │  ├─ errors/                #   예외 타입 + 에러 코드
@@ -1040,6 +1032,7 @@ my-fastapi/
    └─ bootstrap/                # 조립만. 아래를 전부 import 가능 (composition root)
       ├─ app.py                 #   create_app() — FastAPI 인스턴스 생성 + 아래를 순서대로 등록
       ├─ lifespan.py            #   엔진·Redis·스토리지 생성/정리. 전역 인스턴스 0개 (§2.1)
+      ├─ jobs.py                #   주기 작업 (§4.4, §4.5, §4.9). 언제·어떤 트랜잭션으로만 안다
       ├─ middleware.py          #   CORS, 로깅, 요청 ID
       ├─ router.py              #   각 모듈 라우터를 include_router로 수집
       └─ exception_handlers.py  #   에러 코드 → 응답 렌더링 (§2.6)
@@ -1141,12 +1134,12 @@ Phase 3에서 추가로 확정한 것:
   - [x] `comment_count` 갱신이 같은 트랜잭션인지 (§4.4) — 롤백 시 카운트도 롤백
   - [x] 자식 있는 댓글 삭제 → `is_removed` 묘비, 자식은 계속 보임 (§4.7)
   - [x] 트리 조회도 `path` 커서로 자른다 — 인기 글의 댓글 전체를 한 번에 주지 않는다
-- [ ] `board/post/view_counter.py` — Redis 버퍼 + flush 소비자 (§4.5)
-  - [ ] 상세 조회가 여전히 `ConnDep`인지 (쓰기 트랜잭션이 아님)
-  - [ ] **Redis 다운 시에도 조회 200** — fake redis로 예외 주입
-- [ ] `board/attachment/` — 라우터가 `UploadFile` 처리, 서비스는 원시 타입만 (§4.9)
-- [ ] FTS5 가상 테이블 + 동기화 트리거 (§4.8)
-- [ ] `comment_count` 정합성 보정 배치 + 고아 첨부 정리 배치
+- [x] `board/post/view_counter.py` — Redis 버퍼 + flush 소비자 (§4.5)
+  - [x] 상세 조회가 여전히 `ConnDep`인지 (쓰기 트랜잭션이 아님)
+  - [x] **Redis 다운 시에도 조회 200** — fake redis로 예외 주입
+- [x] `board/attachment/` — 라우터가 `UploadFile` 처리, 서비스는 원시 타입만 (§4.9)
+- [~] ~~FTS5 가상 테이블 + 동기화 트리거~~ — 넣었다가 걷어냈다 (§4.8)
+- [x] `comment_count` 정합성 보정 배치 + 고아 첨부 정리 배치
 
 `board` + `post` + `comment` 까지 오면서 확정한 것:
 - **컨텍스트 내부 계약이 린트로 존재한다.** `.importlinter` 의 `board-internal` 이
@@ -1170,6 +1163,32 @@ Phase 3에서 추가로 확정한 것:
   한 개의 댓글이다. 세는 것과 보이는 것이 어긋나면 사용자가 먼저 알아챈다
 - **`path` 는 INSERT 후에 채운다.** 자기 id 를 담아야 하는데 그 id 는 INSERT 전에
   알 수 없다. 두 문장이 한 트랜잭션 안이라 `path` 가 빈 행이 보이는 순간은 없다
+
+조회수·첨부·배치까지 오면서 확정한 것:
+
+- **규칙 #18을 `common/` 안까지 넓혔다.** 원래는 `modules/`만 검사했는데, 그러면
+  `common/` 어딘가에 `text()` 하나가 생겨도 아무도 모른다. 이제 허용 파일은
+  `db/engine.py`·`db/types.py` 둘뿐이고, 그 목록이 곧 **방언을 옮길 때 열어볼 파일
+  목록**이다. 전문검색을 걷어낸 뒤에도 이 규칙은 남는다
+- **`Depends`가 뷰어 식별자를 만든다.** 조회수 중복 판정에는 요청 정보가 필요한데
+  서비스가 `Request`를 받으면 §2.7의 누수다. 라우터가 `Depends`로 받아 **해시된
+  문자열**만 넘긴다 — 조회수를 세자고 접속 주소를 10분씩 보관할 이유는 없다
+- **파일 삭제는 트랜잭션에 들어갈 수 없다.** 행은 롤백되고 파일은 안 된다. 그래서
+  요청 경로는 행만 지우고(§4.9), 정리 배치도 **행 삭제가 커밋된 뒤에** 파일을 지운다.
+  두 단계를 한 함수에 넣으면 롤백된 트랜잭션이 파일만 없애고 간다
+- **`protected_keys()`가 복구 가능성을 정의한다.** 지워진 첨부라도 글에 붙어 있었으면
+  파일을 남긴다 — soft delete는 복구를 전제한다(§1.4). 아무 글에도 붙은 적 없는
+  미연결 행만 파일까지 사라진다
+- **다운로드는 정적 파일 서빙이 아니라 API다.** §0이 화면용 파일 서빙을 금지했지만,
+  첨부 접근에는 `read_role` 판정이 걸려야 한다(§4.6) — 저장소 URL을 그대로 내주면
+  그 검사를 우회할 수 있다. 그래서 URL은 항상 우리 라우트를 가리키고, MIME도
+  서버가 정한다(클라이언트가 준 `text/html`을 돌려주면 그게 XSS 통로다)
+- **전문검색은 넣었다가 걷어냈다** (§4.8). 트리거는 검색을 하지 않아도 모든 글쓰기에서
+  돌고, SQLite는 쓰기가 하나뿐이라 그 비용이 서버 전체의 비용이 된다. 판단 근거는
+  §4.8에 남겼다 — 다시 붙일 때 처음부터 유도하지 않도록
+- **배치는 앱 프로세스 안에서 돌지만, 주기를 0으로 두면 꺼진다.** 별도 프로세스로
+  빼는 배포(k8s CronJob)에서 워커가 같은 배치를 중복 실행하지 않게 하는 스위치다.
+  중복 실행 자체는 안전하다 — flush는 Redis에서 원자적으로 꺼내고, 보정·정리는 멱등이다
 
 ### Phase 5 — 인증/인가
 - [ ] `modules/auth/` — 로그인, 리프레시, `UserSessionStore`(캐시 무효화 단일 지점)

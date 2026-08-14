@@ -27,7 +27,7 @@ class PostRepository:
 
     @staticmethod
     def _published(board_id: int) -> Select[Any]:
-        """공개된 글만. 초안은 목록에도 검색에도 나오지 않는다."""
+        """공개된 글만. 초안은 목록에 나오지 않는다."""
         return select_alive(Post).where(
             post_table.c.board_id == board_id,
             post_table.c.status == PostStatus.published,
@@ -119,6 +119,44 @@ class PostRepository:
             .where(post_table.c.id == pk, alive(Post))
             .values(comment_count=post_table.c.comment_count + delta)
         )
+
+    @staticmethod
+    async def set_comment_count(db: AsyncConnection, pk: int, value: int) -> None:
+        """드리프트 보정 배치 전용 (§4.4). **평상시에는 쓰지 않는다.**
+
+        `bump_comment_count` 와 달리 값을 통째로 덮어쓴다. 실제 카운트를 세어 온
+        배치만이 이 값을 안다 — 요청 경로에서 부르면 동시 댓글의 증분을 지운다.
+        """
+        await db.execute(sa.update(post_table).where(post_table.c.id == pk, alive(Post)).values(comment_count=value))
+
+    @staticmethod
+    async def bump_view_count(db: AsyncConnection, pk: int, delta: int) -> None:
+        """§4.5 — Redis 에 모아둔 증분을 반영한다. 규칙 #13 대로 DB 에서 더한다.
+
+        조회 경로에서 부르지 않는다. 부르는 것은 flush 소비자뿐이다 — 읽기가 쓰기가
+        되면 §1.1 의 `ConnDep` / `TxDep` 구분이 의미를 잃는다.
+        """
+        await db.execute(
+            sa.update(post_table)
+            .where(post_table.c.id == pk, alive(Post))
+            .values(view_count=post_table.c.view_count + delta)
+        )
+
+    @staticmethod
+    async def list_counts(db: AsyncConnection, *, after_id: int, limit: int) -> list[tuple[int, int]]:
+        """`(id, comment_count)` 를 id 순으로. 보정 배치가 전체를 훑을 때 쓴다 (§4.4).
+
+        페이지를 나누는 이유는 목록과 같다 (§4.3) — 게시글 전체를 한 번에 들면
+        메모리도 잠금 시간도 글 수에 비례해서 늘어난다.
+        """
+        statement = (
+            select_alive(Post)
+            .with_only_columns(post_table.c.id, post_table.c.comment_count)
+            .where(post_table.c.id > after_id)
+            .order_by(post_table.c.id)
+            .limit(limit)
+        )
+        return [(row.id, row.comment_count) for row in await db.execute(statement)]
 
 
 post_repository = PostRepository()

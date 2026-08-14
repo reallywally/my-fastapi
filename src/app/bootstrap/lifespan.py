@@ -7,16 +7,20 @@
 엔진의 SQLite 설정(PRAGMA, 명시적 BEGIN)은 `common/db/engine.py` 가 안다.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from redis.asyncio import Redis
 from sqlalchemy import text
 
+from app.bootstrap.jobs import start_jobs, stop_jobs
 from app.common.db.engine import create_engine
 from app.common.http.registry import create_registry
+from app.common.storage import LocalStorage
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -29,12 +33,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     engine = create_engine(settings)
     redis = Redis.from_url(settings.redis_dsn, decode_responses=True)
     upstreams, http_clients = create_registry(settings.upstreams)
+    storage = LocalStorage(Path(settings.storage_root))
 
     app.state.engine = engine
     # 의존성이 연결을 빌리는 통로 (§1.1). 테스트는 이 한 줄만 갈아끼우면 된다 (§2.8).
     app.state.db_source = engine.connect
     app.state.redis = redis
     app.state.upstreams = upstreams
+    app.state.storage = storage
+
+    # 아래 확인이 실패하면 작업을 띄우기 전에 finally 로 간다. 그때도 이름은 있어야 한다.
+    tasks: list[asyncio.Task[None]] = []
 
     try:
         # 기동 시점에 연결을 확인한다. 실패하면 예외가 올라가 기동이 실패한다.
@@ -44,10 +53,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         # 업스트림은 **찔러보지 않는다.** 남의 서버가 잠깐 죽었다고 우리 배포가 막히면
         # 장애가 전파된다. 도달 여부는 `/health/ready` 가 계속 보고한다.
-        logger.info('resources ready (env=%s)', settings.environment)
+
+        # 주기 작업은 자원이 전부 준비된 **뒤에** 띄운다 (§4.4, §4.5, §4.9).
+        # 먼저 띄우면 아직 없는 engine·redis 를 잡으러 간다.
+        tasks.extend(start_jobs(app, settings))
+        logger.info('resources ready (env=%s, jobs=%d)', settings.environment, len(tasks))
         yield
     finally:
         # ping 이 실패해도 여기까지 온다 — 열린 자원을 남기지 않는다.
+        # **자원을 닫기 전에 작업을 멈춘다.** 순서가 반대면 돌던 작업이 닫힌 연결을 잡는다.
+        await stop_jobs(tasks)
         for http_client in http_clients:
             await http_client.aclose()
         await redis.aclose()

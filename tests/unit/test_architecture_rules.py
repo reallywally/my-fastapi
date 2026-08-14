@@ -214,6 +214,30 @@ def test_rule_18_dialect_specifics_do_not_leak_into_modules():
     assert not offenders, f'modules/ 안에 방언 전용 코드가 있다: {offenders}'
 
 
+def test_rule_18_raw_sql_in_common_lives_only_where_portability_does():
+    """규칙 #18 의 나머지 절반 — `common/` 안에서도 원시 SQL 은 세 파일에만 있다.
+
+    `modules/` 를 막는 것만으로는 부족하다. `common/` 어딘가에 `text()` 가 하나
+    생기면 이식성의 경계가 조용히 넓어지고, 방언을 옮기는 날 어디를 고쳐야 하는지
+    아무도 모른다. 허용 목록은 **방언을 옮길 때 열어볼 파일 목록**과 같은 뜻이다:
+
+    - `db/engine.py` — 연결 설정 (PRAGMA, 커넥션 풀)
+    - `db/types.py`  — 컬럼 타입 (자동 증가 PK, tz 보존)
+    """
+    allowed = {'common/db/engine.py', 'common/db/types.py'}
+    common_files = [path for path in SOURCE_FILES if _name(path).startswith('common/') and _name(path) not in allowed]
+
+    def _uses_raw_sql(tree: ast.Module) -> bool:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith('sqlalchemy.dialects'):
+                return True
+        # `path.read_text()` 같은 동명이인을 거른다 — 잡을 것은 `sqlalchemy.text()` 다.
+        return any(name == 'text' for name in _called_names(tree))
+
+    offenders = _offenders(common_files, _uses_raw_sql)
+    assert not offenders, f'common/ 안에 방언 전용 코드가 새어 나갔다: {offenders}'
+
+
 def test_rule_6_soft_delete_condition_is_never_written_by_hand():
     """규칙 #6 — `deleted == 0` 은 `common/db/sql.py` 의 `alive()` 에만 있다 (§2.4).
 

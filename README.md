@@ -74,7 +74,8 @@ DATABASE_URL=mysql+asyncmy://app:app@localhost:3306/app
    그대로 돌지만, SQLite 파일의 데이터는 따라가지 않는다.
 3. **테스트를 그 방언으로 한 번 돌린다.** `tests/unit/test_dialect_portability.py` 는
    컴파일만 검사한다 — 잠금·격리 수준·정렬 같은 런타임 차이는 실제로 돌려야 안다.
-4. **§4.8 전문검색은 다시 짜야 한다.** SQLite FTS5 / PostgreSQL `TSVECTOR` /
+4. 전문검색은 신경 쓰지 않아도 된다 — **지금은 검색 기능이 없다** (§4.8). 나중에
+   붙인다면 그때는 방언별로 다시 짜야 한다. SQLite FTS5 / PostgreSQL `TSVECTOR` /
    MySQL FULLTEXT 는 어떤 추상화로도 안 덮인다.
 
 ## 외부 서버 호출 (§5)

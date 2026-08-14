@@ -14,6 +14,7 @@
 from typing import Final
 
 from app.common.db import Record
+from app.modules.board.attachment import model as attachment_model
 from app.modules.board.board import model as board_model
 from app.modules.board.comment import model as comment_model
 from app.modules.board.post import model as post_model
@@ -24,6 +25,7 @@ MODELS: Final[tuple[type[Record], ...]] = (
     board_model.Board,
     post_model.Post,
     comment_model.Comment,
+    attachment_model.Attachment,
 )
 
-__all__ = ['MODELS', 'board_model', 'comment_model', 'post_model', 'user_model']
+__all__ = ['MODELS', 'attachment_model', 'board_model', 'comment_model', 'post_model', 'user_model']

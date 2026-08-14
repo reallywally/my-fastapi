@@ -84,6 +84,38 @@ class Settings(BaseSettings):
     access_token_ttl_seconds: int = 60 * 15
     refresh_token_ttl_seconds: int = 60 * 60 * 24 * 14
 
+    # --- 첨부파일 (§4.9). 저장소 인스턴스는 lifespan 이 만든다 (§2.1)
+    #: 로컬 저장소의 루트. S3 로 바꾸면 이 값 대신 버킷 설정이 온다.
+    storage_root: str = './var/uploads'
+    #: 업로드 상한. 저장하면서 재고, 넘으면 그 자리에서 끊는다 — 다 받은 뒤에 재면
+    #: 상한이 디스크를 지켜주지 못한다.
+    attachment_max_bytes: int = 10 * 1024 * 1024
+    #: 확장자 허용 목록. 클라이언트가 보낸 `Content-Type` 은 판정에 쓰지 않는다.
+    attachment_allowed_extensions: tuple[str, ...] = (
+        'jpg',
+        'jpeg',
+        'png',
+        'gif',
+        'webp',
+        'pdf',
+        'txt',
+        'csv',
+        'zip',
+        'docx',
+        'xlsx',
+        'pptx',
+    )
+
+    # --- 백그라운드 작업 (§4.4, §4.5, §4.9). 0 이면 그 작업을 돌리지 않는다
+    #: 조회수 버퍼를 DB 에 반영하는 주기. 짧을수록 조회수가 최신이고 쓰기가 잦다.
+    view_flush_interval_seconds: int = 30
+    #: `comment_count` 드리프트 보정 주기. 야간 배치를 전제로 한 값이다.
+    comment_count_reconcile_interval_seconds: int = 60 * 60 * 24
+    #: 고아 첨부 정리 주기.
+    attachment_cleanup_interval_seconds: int = 60 * 60
+    #: 이 시간이 지나도 글에 붙지 않은 첨부는 고아로 본다. 방금 올라온 것은 진행 중이다.
+    attachment_orphan_ttl_seconds: int = 60 * 60 * 24
+
     # --- CORS (§0: 허용 오리진은 설정값. 하드코딩 금지)
     # 환경변수에는 JSON 배열로 넣는다: CORS_ALLOW_ORIGINS=["http://localhost:3000"]
     cors_allow_origins: tuple[str, ...] = ()

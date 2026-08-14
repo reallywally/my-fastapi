@@ -11,6 +11,7 @@
 **라우터가 넘긴 `actor`** 이고, 소유자는 `post.author_id` 다.
 """
 
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.common.errors import ForbiddenError, NotFoundError
@@ -20,6 +21,7 @@ from app.modules.board.board.service import board_service
 from app.modules.board.post.model import Post, PostStatus
 from app.modules.board.post.repository import post_repository
 from app.modules.board.post.schema import CreatePostRequest, PostSummaryResponse, UpdatePostRequest
+from app.modules.board.post.view_counter import post_views
 
 
 class PostService:
@@ -48,12 +50,31 @@ class PostService:
         (Phase 5), 그때까지 열어두면 남의 초안이 공개된다. 404 는 안전한 쪽으로 틀린다.
 
         조회수는 여기서 올리지 않는다 — 읽기가 쓰기가 되면 안 된다 (§4.5).
-        `view_counter` 가 Phase 4 의 다음 항목이다.
+        상세 조회는 `view()` 를 쓴다.
         """
         post = await post_repository.get(db, pk)
         if post is None or post.status is not PostStatus.published:
             raise NotFoundError(code='post.not_found')
         await board_service.readable(db=db, board_id=post.board_id)
+        return post
+
+    @classmethod
+    async def view(cls, *, db: AsyncConnection, redis: Redis, pk: int, viewer_key: str) -> Post:
+        """상세 조회 + 조회수 1회 (§4.5).
+
+        `db` 는 여전히 `ConnDep` 이다 — 여기서 DB 에 쓰는 것은 아무것도 없고, 증분은
+        Redis 로 간다. 읽기 엔드포인트를 쓰기 트랜잭션으로 만들지 않는 것이 §4.5 의
+        핵심이고 규칙 #12 다.
+
+        **응답에는 DB 의 `view_count` 만 쓴다.** pending 을 더해서 정확하게 보이려는
+        유혹을 참는다 — 그러면 모든 조회가 Redis 왕복을 한 번 더 하고, 그러고도 값은
+        여전히 근사치다.
+
+        접근 권한 판정이 먼저다. 볼 수 없는 글의 조회수를 올리면 비공개 게시판의
+        존재가 조회수로 새어 나간다.
+        """
+        post = await cls.get(db=db, pk=pk)
+        await post_views.hit(redis, post.id, viewer_key)
         return post
 
     @staticmethod

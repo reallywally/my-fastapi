@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.common.security import hash_password
+from app.modules.board.attachment.repository import attachment_repository
 from app.modules.board.board.model import Board
 from app.modules.board.board.repository import board_repository
 from app.modules.board.comment.model import Comment
@@ -94,6 +95,28 @@ async def create_posts(db: AsyncConnection, count_: int, *, board_id: int, autho
 def comment_fields(**overrides: Any) -> dict[str, Any]:
     n = next(_sequence)
     return {'content': f'댓글 {n}'} | overrides
+
+
+def attachment_fields(**overrides: Any) -> dict[str, Any]:
+    """저장소 키는 실제 저장 결과가 아니라 **모양만 맞춘 값**이다.
+
+    행만 필요한 테스트가 대부분이라 파일까지 만들지 않는다. 파일이 필요한 테스트는
+    `storage.save()` 로 진짜 파일을 만들고 그 키를 넘긴다 — 그래야 §4.9 의 고아 판정을
+    검증할 수 있다.
+    """
+    n = next(_sequence)
+    return {
+        'filename': f'파일{n}.txt',
+        'content_type': 'text/plain',
+        'size': 11,
+        'storage_key': f'2026/08/{n:032x}.txt',
+    } | overrides
+
+
+async def create_attachment(db: AsyncConnection, *, author_id: int, post_id: int | None = None, **overrides: Any):
+    return await attachment_repository.insert(
+        db, post_id=post_id, author_id=author_id, **attachment_fields(**overrides)
+    )
 
 
 async def create_comment(

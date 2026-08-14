@@ -46,7 +46,6 @@ post_table: Table = define_table(
     # board_id 로 좁힌 뒤 id 로 정렬한다 — 그 순서 그대로여야 인덱스를 탄다.
     Index('ix_post_list', 'board_id', 'deleted', 'id'),
     Index('ix_post_author', 'author_id', 'deleted'),
-    # 전문검색은 별도 FTS5 가상 테이블이다 (§4.8). 여기에 컬럼을 두지 않는다.
 )
 
 

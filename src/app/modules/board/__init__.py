@@ -14,6 +14,8 @@
 
 from fastapi import APIRouter
 
+from app.modules.board.attachment.router import post_router as _attachment_post_router
+from app.modules.board.attachment.router import router as _attachment_router
 from app.modules.board.board.router import router as _board_router
 from app.modules.board.comment.router import post_router as _comment_post_router
 from app.modules.board.comment.router import router as _comment_router
@@ -30,5 +32,7 @@ router.include_router(_post_board_router)
 router.include_router(_post_router)
 router.include_router(_comment_post_router)
 router.include_router(_comment_router)
+router.include_router(_attachment_post_router)
+router.include_router(_attachment_router)
 
 __all__ = ['router']

@@ -55,6 +55,24 @@ class CommentRepository:
         )
         return (await db.execute(statement)).scalar_one()
 
+    @staticmethod
+    async def count_alive_by_post(db: AsyncConnection, post_ids: list[int]) -> dict[int, int]:
+        """글마다 살아 있는 댓글 수. 보정 배치가 쓴다 (§4.4).
+
+        기준이 `comment_count` 와 같아야 한다 — **묘비도 한 개로 센다** (§4.7).
+        여기서 빼면 배치가 돌 때마다 화면의 개수가 줄어든다.
+
+        결과에 없는 글은 댓글이 0개다. 0 을 돌려주려고 빈 행을 만들지 않는다.
+        """
+        if not post_ids:
+            return {}
+        statement = (
+            sa.select(comment_table.c.post_id, sa.func.count())
+            .where(comment_table.c.post_id.in_(post_ids), alive(Comment))
+            .group_by(comment_table.c.post_id)
+        )
+        return dict((await db.execute(statement)).all())  # type: ignore[arg-type]
+
     @classmethod
     async def insert(
         cls,

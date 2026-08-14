@@ -37,11 +37,11 @@ forbidden_modules =
     app.bootstrap
 
 ; board 컨텍스트 내부 방향도 단방향이다 (§4.1).
-; attachment 는 Phase 4 의 다음 항목이고, 생기면 comment 와 같은 줄에 붙는다.
+; comment 와 attachment 는 같은 줄이다 — 둘 다 post 위에 있고 서로는 모른다.
 [importlinter:contract:board-internal]
 name = Board context internal layers
 type = layers
 layers =
-    app.modules.board.comment
+    app.modules.board.comment | app.modules.board.attachment
     app.modules.board.post
     app.modules.board.board
